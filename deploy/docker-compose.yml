@@ -18,6 +18,9 @@ services:
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      # GHCR 私有镜像：把 docker login 的凭证挂给 watchtower
+      #（用 sudo docker login 登录的话凭证在 /root/.docker/config.json）
+      - /root/.docker/config.json:/config.json:ro
     environment:
       # 新版 Docker 守护进程要求 API >= 1.40，watchtower 默认协商值过老
       - DOCKER_API_VERSION=1.44
