@@ -960,7 +960,7 @@ function renderOwnBody() {
       <table class="u-table">
         <thead><tr><th>用户</th><th>请求数</th><th>Tokens</th><th>消费</th><th>占比</th></tr></thead>
         <tbody>${users.map((u) => `<tr>
-          <td class="mono">${esc(u.user)}</td>
+          <td class="mono">${esc(u.user)}${u.isAdmin ? ' <span class="demo-tag tag-warn">管理员</span>' : ""}</td>
           <td>${u.requests.toLocaleString("en-US")}</td>
           <td>${u.tokens.toLocaleString("en-US")}</td>
           <td>${cny4(u.cost)}</td>
@@ -968,6 +968,7 @@ function renderOwnBody() {
         </tr>`).join("") || '<tr><td colspan="5" class="u-empty">该范围内暂无数据</td></tr>'}</tbody>
       </table>
     </div>
+    ${userBalanceSection(d.userBalances, rate)}
     <div class="section-head" style="margin-top:16px"><h2>模型明细</h2><span class="muted">共 ${models.length} 个模型</span></div>
     <div class="panel u-table-wrap">
       <table class="u-table">
@@ -987,6 +988,31 @@ function renderOwnBody() {
   drawOwnUsers($("#ownUserChart"), users);
   drawForecast($("#ownForecastChart"), d.daily.map((x) => ({ t: x.t, cost: x.cost * rate })),
     fc ? fc.points.map((p) => ({ ...p, cost: p.cost * rate, lo: p.lo * rate, hi: p.hi * rate })) : null);
+}
+
+// 用户余额（不含管理员/root）：非零余额排序展示，零余额只报数量
+function userBalanceSection(list, rate) {
+  if (!list) return "";
+  const nonZero = list.filter((u) => u.balanceUsd > 0.0001);
+  const zeroCount = list.length - nonZero.length;
+  const totalCny = list.reduce((a, u) => a + u.balanceUsd, 0) * rate;
+  return `
+    <div class="section-head" style="margin-top:16px"><h2>用户余额</h2>
+      <span class="muted">不含管理员 · 共 ${list.length} 个用户 · 余额合计 ${cny(totalCny)}</span></div>
+    <div class="panel u-table-wrap">
+      <table class="u-table">
+        <thead><tr><th>用户</th><th>余额</th><th>累计已用</th><th>状态</th></tr></thead>
+        <tbody>
+          ${nonZero.map((u) => `<tr>
+            <td class="mono">${esc(u.user)}</td>
+            <td>${cny4(u.balanceUsd * rate)}</td>
+            <td>${cny(u.usedUsd * rate)}</td>
+            <td>${u.status === 1 ? "正常" : '<span class="muted">已禁用</span>'}</td>
+          </tr>`).join("") || '<tr><td colspan="4" class="u-empty">没有余额大于 0 的用户</td></tr>'}
+          ${zeroCount > 0 ? `<tr><td colspan="4" class="u-empty">另有 ${zeroCount} 个用户余额为 0</td></tr>` : ""}
+        </tbody>
+      </table>
+    </div>`;
 }
 
 // 利润区块：收入 − 匹配上游的成本；未匹配渠道单独列出
@@ -1020,9 +1046,11 @@ function profitSection(p) {
       </div>`).join("")}</div>` : "";
   return `
     <div class="section-head"><h2>利润分析</h2>
-      <span class="muted">收入按你的售价汇率 · 成本按各上游充值汇率（窗口 ${p.windowDays} 天）</span></div>
+      <span class="muted">收入 = 普通用户消费 × 售价汇率（不含管理员/root）· 成本按各上游口径（窗口 ${p.windowDays} 天）</span></div>
     <div class="stats" style="grid-template-columns:repeat(4,1fr)">
-      <div class="stat-card"><div class="label">期内收入</div><div class="value">${cny(p.incomeCny)}</div></div>
+      <div class="stat-card"><div class="label">期内收入</div><div class="value">${cny(p.incomeCny)}</div>${
+        p.adminUsageCny > 0 ? `<div class="stat-sub">管理员另消耗 ${cny(p.adminUsageCny)}（计成本不计收入）</div>` : ""
+      }</div>
       <div class="stat-card"><div class="label">期内成本</div><div class="value">${cny(p.totalCostCny)}</div></div>
       <div class="stat-card"><div class="label">利润</div><div class="value ${profitCls}">${cny(p.profitCny)}</div></div>
       <div class="stat-card"><div class="label">利润率</div><div class="value ${profitCls}">${p.marginPct != null ? p.marginPct + "%" : "—"}</div></div>

@@ -5,7 +5,7 @@ import { readFile } from "node:fs/promises";
 
 import { Store } from "./lib/store.js";
 import {
-  queryStation, queryStationUsage, queryOwnData, queryOwnChannels,
+  queryStation, queryStationUsage, queryOwnData, queryOwnChannels, queryOwnUsers,
   dateStrInTz, parseDateLabel, dailyFixedCny, STATION_TYPES,
 } from "./lib/providers.js";
 import { forecastDaily } from "./lib/forecast.js";
@@ -181,6 +181,19 @@ mock.get("/newapi/:acc/api/data/", (req, res) => {
 mock.get("/newapi/:acc/api/data/users", (req, res) => {
   if (!needAuth(req, res)) return;
   res.json({ success: true, message: "", data: mockOwnRows(Number(req.query.start_timestamp) || 0, Number(req.query.end_timestamp) || 0, "user") });
+});
+mock.get("/newapi/:acc/api/user/", (req, res) => {
+  if (!needAuth(req, res)) return;
+  res.json({
+    success: true, message: "",
+    data: { items: [
+      { id: 1, username: "root", display_name: "Root", role: 100, status: 1, quota: 99500000, used_quota: 4200000 },
+      { id: 2, username: "alice", display_name: "", role: 1, status: 1, quota: 5250000, used_quota: 61500000 },
+      { id: 3, username: "bob", display_name: "", role: 1, status: 1, quota: 1200000, used_quota: 38200000 },
+      { id: 4, username: "carol", display_name: "", role: 1, status: 1, quota: 0, used_quota: 17800000 },
+      { id: 5, username: "dave", display_name: "", role: 10, status: 1, quota: 800000, used_quota: 9200000 },
+    ], total: 5 },
+  });
 });
 mock.get("/newapi/:acc/api/channel/", (req, res) => {
   if (!needAuth(req, res)) return;
@@ -534,16 +547,33 @@ app.get("/api/own/analytics", async (req, res) => {
         daily.push({ t, cost: Math.round((dmap.get(t) || 0) * 10000) / 10000 });
       }
     }
-    const byUser = aggBy(userRows, "user");
+    // 用户列表：识别管理员（role >= 10）并取各用户余额
+    let ownUsers = null;
+    try {
+      ownUsers = await getOwnUsers(own);
+    } catch { /* 拿不到就退化为不区分管理员 */ }
+    const adminSet = new Set((ownUsers || []).filter((u) => u.role >= 10).map((u) => u.username));
+
+    const byUser = aggBy(userRows, "user").map((u) => ({ ...u, isAdmin: adminSet.has(u.user) }));
+    // 收入 = 普通用户的期内消费；管理员/root 自己用不产生收入，但上游成本照付
+    const incomeUsd = byUser.filter((u) => !u.isAdmin).reduce((a, u) => a + u.cost, 0);
+    const adminUsageUsd = byUser.filter((u) => u.isAdmin).reduce((a, u) => a + u.cost, 0);
+
     const payload = {
       range, tz, startMs, endMs: now,
       station: { id: own.id, name: own.name, cnyPerUsd: own.cnyPerUsd ?? null },
       byModel: aggBy(winModel, "model"),
       byUser,
+      userBalances: ownUsers
+        ? ownUsers
+            .filter((u) => u.role < 10)
+            .map((u) => ({ user: u.username, balanceUsd: Math.round(u.quotaUsd * 10000) / 10000, usedUsd: Math.round(u.usedUsd * 100) / 100, status: u.status }))
+            .sort((a, b) => b.balanceUsd - a.balanceUsd)
+        : null,
       trend: [...tmap.values()].sort((a, b) => a.t - b.t),
       daily: daily.slice(-14),
       forecast: forecastDaily(daily, 7),
-      profit: await computeProfit(own, payloadIncome(winModel), { startMs, now, tz, range }),
+      profit: await computeProfit(own, incomeUsd, adminUsageUsd, { startMs, now, tz, range }),
       generatedAt: new Date().toISOString(),
     };
     ownCache.set(cacheKey, { at: Date.now(), payload });
@@ -553,8 +583,13 @@ app.get("/api/own/analytics", async (req, res) => {
   }
 });
 
-function payloadIncome(winModelRows) {
-  return winModelRows.reduce((a, r) => a + r.cost, 0);
+// 用户列表拉取开销不小，缓存 10 分钟
+let ownUsersCache = { at: 0, stationId: null, list: null };
+async function getOwnUsers(own) {
+  if (!ownUsersCache.list || ownUsersCache.stationId !== own.id || Date.now() - ownUsersCache.at > 600000) {
+    ownUsersCache = { at: Date.now(), stationId: own.id, list: await queryOwnUsers(own) };
+  }
+  return ownUsersCache.list;
 }
 
 // 渠道列表拉取开销不小，缓存 10 分钟
@@ -566,7 +601,7 @@ let ownChannelsCache = { at: 0, stationId: null, list: null };
  * 否则按上游用量接口的实际扣费 × 充值汇率；用量接口不可用时退回余额下降推算。
  * 渠道按 base_url 与监控站点匹配（忽略协议/末尾斜杠/是否带 /api）。
  */
-async function computeProfit(own, incomeUsd, { startMs, now, tz, range }) {
+async function computeProfit(own, incomeUsd, adminUsageUsd, { startMs, now, tz, range }) {
   const r2 = (v) => Math.round(v * 100) / 100;
   try {
     if (!ownChannelsCache.list || ownChannelsCache.stationId !== own.id || Date.now() - ownChannelsCache.at > 600000) {
@@ -646,6 +681,7 @@ async function computeProfit(own, incomeUsd, { startMs, now, tz, range }) {
     const totalCostCny = r2(costs.reduce((a, c) => a + c.cny, 0));
     return {
       incomeCny, totalCostCny,
+      adminUsageCny: r2((adminUsageUsd || 0) * ownRate),
       profitCny: r2(incomeCny - totalCostCny),
       marginPct: incomeCny > 0 ? Math.round(((incomeCny - totalCostCny) / incomeCny) * 1000) / 10 : null,
       costs: costs.sort((a, b) => b.cny - a.cny),
