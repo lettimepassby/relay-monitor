@@ -438,6 +438,8 @@ app.put("/api/settings", async (req, res) => {
     patch.lowBalanceUsd = Math.max(0, Number(req.body.lowBalanceUsd) || 0);
   const settings = await store.updateSettings(patch);
   restartPolling();
+  // 立即刷新一轮：重置定时器后第一次触发要等满整个周期，不主动刷会显得设置没生效
+  refreshAll().catch(() => {});
   res.json({ settings });
 });
 
@@ -471,9 +473,12 @@ app.use(express.static(join(__dirname, "public")));
 // ---------------------------------------------------------------------------
 let pollTimer = null;
 let pollRunning = false;
+let pollSec = 0;
 function restartPolling() {
-  if (pollTimer) clearInterval(pollTimer);
   const sec = store.settings.refreshIntervalSec || 60;
+  if (pollTimer && sec === pollSec) return; // 间隔没变（比如只改了阈值）就不重置节拍
+  pollSec = sec;
+  if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(() => {
     if (pollRunning) return; // 上一轮还没结束（慢站点超时可达几十秒）就跳过本轮
     pollRunning = true;

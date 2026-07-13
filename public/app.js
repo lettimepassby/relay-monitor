@@ -1135,7 +1135,11 @@ function drawChart(wrap, points, prediction) {
 }
 
 // ---- 事件委托 --------------------------------------------------------------
-document.querySelectorAll(".nav-item").forEach((n) => (n.onclick = () => { state.view = n.dataset.view; render(); }));
+document.querySelectorAll(".nav-item").forEach((n) => (n.onclick = () => {
+  state.view = n.dataset.view;
+  render(); // 先用缓存立即渲染
+  if (isDataView()) reload().catch(() => {}); // 切回数据视图时后台拉一次最新
+}));
 
 $(".main").addEventListener("click", async (e) => {
   if (e.target.closest("#hdrAdd")) return openModal(null);
