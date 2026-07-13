@@ -1618,6 +1618,11 @@ $("#trendClose").onclick = () => $("#trendModal").classList.remove("open");
 backdropClose("trendModal", () => $("#trendModal").classList.remove("open"));
 $("#reportClose").onclick = () => $("#reportModal").classList.remove("open");
 backdropClose("reportModal", () => $("#reportModal").classList.remove("open"));
+document.querySelectorAll(".rpt-tab").forEach((b) => (b.onclick = () => {
+  document.querySelectorAll(".rpt-tab").forEach((x) => x.classList.toggle("active", x === b));
+  $("#reportHtml").style.display = b.dataset.rt === "html" ? "" : "none";
+  $("#reportText").style.display = b.dataset.rt === "text" ? "" : "none";
+}));
 
 function niceStep(rough) {
   const pow = Math.pow(10, Math.floor(Math.log10(rough || 1)));
@@ -1828,6 +1833,7 @@ $(".main").addEventListener("click", async (e) => {
     try {
       const r = await api.reportPreview();
       $("#reportText").textContent = r.text;
+      $("#reportHtml").srcdoc = r.html || "<p>无 HTML 版本</p>";
       $("#reportModal").classList.add("open");
     } catch (err) { toast(err.message, "err"); }
     finally { drPreview.disabled = false; }

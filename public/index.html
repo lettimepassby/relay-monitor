@@ -208,7 +208,12 @@
         <p>按当前数据生成的昨日报告（实际发送时按设定时间的数据）</p>
       </div>
       <div class="modal-body">
-        <pre class="report-pre" id="reportText"></pre>
+        <div class="report-tabs">
+          <button class="btn btn-ghost rpt-tab active" data-rt="html">HTML（邮件效果）</button>
+          <button class="btn btn-ghost rpt-tab" data-rt="text">纯文本（IM 渠道）</button>
+        </div>
+        <iframe class="report-frame" id="reportHtml" sandbox=""></iframe>
+        <pre class="report-pre" id="reportText" style="display:none"></pre>
       </div>
       <div class="modal-foot">
         <button class="btn btn-secondary" id="reportClose">关闭</button>
