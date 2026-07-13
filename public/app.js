@@ -933,8 +933,12 @@ function renderOwnBody() {
   const users = d.byUser.map((u) => ({ ...u, cost: u.cost * rate }));
 
   const fc = d.forecast;
+  const fcLo = fc ? (fc.nextLo ?? fc.points.reduce((a, p) => a + p.lo, 0)) : 0;
+  const fcHi = fc ? (fc.nextHi ?? fc.points.reduce((a, p) => a + p.hi, 0)) : 0;
   const fcSub = fc
-    ? `未来 7 天预计 ${cny(fc.nextTotal * rate)}（区间 ${cny(fc.points.reduce((a, p) => a + p.lo, 0) * rate)} ~ ${cny(fc.points.reduce((a, p) => a + p.hi, 0) * rate)}）· ${fc.method} · 基于 ${fc.sampleDays} 天`
+    ? `未来 7 天预计 ${cny(fc.nextTotal * rate)}（区间 ${cny(fcLo * rate)} ~ ${cny(fcHi * rate)}）· ${fc.method} · 基于 ${fc.sampleDays} 天${
+        fc.backtestWapePct != null ? ` · 近 2 周回测日均偏差 ±${fc.backtestWapePct}%` : ""
+      }`
     : "历史数据不足 3 天，暂无法预测";
 
   el.innerHTML = `
