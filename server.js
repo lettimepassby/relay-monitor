@@ -12,7 +12,8 @@ import { forecastDaily, forecastHourly } from "./lib/forecast.js";
 import { SessionManager, verifyPassword } from "./lib/auth.js";
 import { History } from "./lib/history.js";
 import { evaluateStation } from "./lib/alerts.js";
-import { CHANNEL_TYPES, sendToChannel } from "./lib/notify.js";
+import { CHANNEL_TYPES, sendToChannel, broadcast } from "./lib/notify.js";
+import { fmtEta } from "./lib/alerts.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 8787;
@@ -750,6 +751,185 @@ async function computeProfit(own, incomeUsd, adminUsageUsd, { startMs, now, tz, 
   }
 }
 
+// ---- 每日日报 ------------------------------------------------------------------
+const rptCny = (v) => "¥" + Number(v ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const rptTok = (n) => {
+  n = Number(n) || 0;
+  if (n >= 1e9) return +(n / 1e9).toFixed(1) + "B";
+  if (n >= 1e6) return +(n / 1e6).toFixed(1) + "M";
+  if (n >= 1e3) return +(n / 1e3).toFixed(1) + "K";
+  return String(n);
+};
+const pctDelta = (cur, base) => {
+  if (!(base > 0)) return "";
+  const d = ((cur - base) / base) * 100;
+  return `${d >= 0 ? "+" : ""}${d.toFixed(1)}%`;
+};
+
+// 汇总昨日（服务器时区自然日）经营情况，返回 {title, text}
+async function buildDailyReport() {
+  const own = store.list().find((s) => s.isOwn && s.type === "newapi");
+  if (!own) throw new Error("还没有标记「我的中转站」，无法生成日报");
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const midnight = new Date();
+  midnight.setHours(0, 0, 0, 0);
+  const dayEnd = midnight.getTime();
+  const dayStart = dayEnd - 86400000;
+  const wideStart = dayEnd - 34 * 86400000;
+  const ownRate = own.cnyPerUsd != null && own.cnyPerUsd > 0 ? own.cnyPerUsd : 1;
+
+  const [modelRows, userRows] = await Promise.all([
+    queryOwnData(own, wideStart, Date.now(), "model"),
+    queryOwnData(own, dayStart, dayEnd, "user"),
+  ]);
+  let ownUsers = null;
+  try { ownUsers = await getOwnUsers(own); } catch { /* 降级：不区分管理员 */ }
+  const adminSet = new Set((ownUsers || []).filter((u) => u.role >= 10).map((u) => u.username));
+
+  // 昨日聚合
+  const agg = (rows) => {
+    const m = new Map();
+    for (const r of rows) {
+      const a = m.get(r.key) || { key: r.key, tokens: 0, cost: 0, requests: 0 };
+      a.tokens += r.tokens; a.cost += r.cost; a.requests += r.requests;
+      m.set(r.key, a);
+    }
+    return [...m.values()].sort((a, b) => b.cost - a.cost);
+  };
+  const yRows = modelRows.filter((r) => r.t >= dayStart && r.t < dayEnd);
+  const byModel = agg(yRows);
+  const byUser = agg(userRows).map((u) => ({ ...u, isAdmin: adminSet.has(u.key) }));
+  const totalCost = byModel.reduce((a, m) => a + m.cost, 0);
+  const totalTokens = byModel.reduce((a, m) => a + m.tokens, 0);
+  const totalReqs = byModel.reduce((a, m) => a + m.requests, 0);
+  const incomeUsd = byUser.filter((u) => !u.isAdmin).reduce((a, u) => a + u.cost, 0);
+  const adminUsd = byUser.filter((u) => u.isAdmin).reduce((a, u) => a + u.cost, 0);
+
+  // 昨日利润（成本窗口 = 昨日自然日）
+  const profit = await computeProfit(own, incomeUsd, adminUsd, { startMs: dayStart, now: dayEnd, tz, range: "7d" });
+
+  // 日序列（近 34 天，不含今天）→ 环比与预测
+  const dmap = new Map();
+  for (const r of modelRows) {
+    if (r.t >= dayEnd) continue;
+    const dt = parseDateLabel(dateStrInTz(r.t, tz), tz);
+    dmap.set(dt, (dmap.get(dt) || 0) + r.cost);
+  }
+  const daily = [];
+  if (dmap.size) {
+    const firstDay = Math.min(...dmap.keys());
+    for (let t = firstDay; t < dayEnd; t += 86400000) daily.push({ t, cost: dmap.get(t) || 0 });
+  }
+  const prev = daily.length >= 2 ? daily[daily.length - 2].cost : null;
+  const avg7 = daily.slice(-7).reduce((a, x) => a + x.cost, 0) / Math.min(7, daily.length || 1);
+  const fc = forecastDaily(daily, 7);
+
+  // 上游余额状态（排除自有站与固定成本渠道）
+  const upstreams = store.list().filter((s) => !s.isOwn && s.type !== "fixed");
+  const upLines = upstreams.map((s) => {
+    const rate = s.cnyPerUsd != null && s.cnyPerUsd > 0 ? s.cnyPerUsd : 1;
+    const b = s.balance;
+    if (!b) return `- ${s.name}：尚未查询`;
+    if (!b.ok) return `- ${s.name}：⚠ 查询失败（${b.error || "未知错误"}）`;
+    const p = history.predict(s.id);
+    let tail = "近期无消耗";
+    if (p && p.etaDays != null) tail = `≈${rptCny(p.burnPerDay * rate)}/天 · 预计 ${fmtEta(p.etaDays)}后耗尽${p.etaDays <= 3 ? " ⚠" : ""}`;
+    return `- ${s.name}：${rptCny(b.remaining * rate)}（${tail}）`;
+  });
+
+  const balanceTotal = (ownUsers || [])
+    .filter((u) => u.role < 10)
+    .reduce((a, u) => a + u.quotaUsd, 0) * ownRate;
+
+  const dateLabel = dateStrInTz(dayStart, tz);
+  const dow = "日一二三四五六"[new Date(dayStart).getDay()];
+  const L = [];
+  L.push(`【${own.name} 日报】${dateLabel}（周${dow}）`);
+  L.push("");
+  L.push("■ 经营概览");
+  L.push(`昨日消费：${rptCny(totalCost * ownRate)}${prev != null ? `（环比 ${pctDelta(totalCost, prev)}，近7天日均 ${rptCny(avg7 * ownRate)} ${pctDelta(totalCost, avg7)}）` : ""}`);
+  L.push(`收入(不含管理员)：${rptCny(incomeUsd * ownRate)} ｜ 管理员消耗：${rptCny(adminUsd * ownRate)}`);
+  if (profit && !profit.error) {
+    L.push(`成本：${rptCny(profit.totalCostCny)} ｜ 利润：${rptCny(profit.profitCny)}${profit.marginPct != null ? `（利润率 ${profit.marginPct}%）` : ""}`);
+  }
+  L.push("");
+  L.push("■ 用量");
+  L.push(`请求 ${totalReqs.toLocaleString("en-US")} 次 ｜ Tokens ${rptTok(totalTokens)} ｜ 活跃用户 ${byUser.length} 个`);
+  L.push("");
+  L.push("■ Top 模型（按消费）");
+  byModel.slice(0, 5).forEach((m, i) => L.push(`${i + 1}. ${m.key}  ${rptCny(m.cost * ownRate)}（${rptTok(m.tokens)} tokens · ${m.requests.toLocaleString("en-US")} 次）`));
+  if (!byModel.length) L.push("（昨日无消费）");
+  L.push("");
+  L.push("■ Top 用户（按消费）");
+  byUser.slice(0, 5).forEach((u, i) => L.push(`${i + 1}. ${u.key}${u.isAdmin ? "（管理员）" : ""}  ${rptCny(u.cost * ownRate)}（${rptTok(u.tokens)} tokens）`));
+  if (!byUser.length) L.push("（昨日无消费）");
+  if (profit && !profit.error && profit.costs.length) {
+    L.push("");
+    L.push("■ 成本明细（昨日）");
+    const MODE = { usage: "按用量", fixed: "固定摊销", history: "余额推算≈" };
+    profit.costs.forEach((c) => L.push(`- ${c.name}  ${rptCny(c.cny)}（${MODE[c.mode] || c.mode}${c.note ? " · " + c.note : ""}）`));
+    if (profit.unmatched.length) L.push(`（另有 ${profit.unmatched.length} 组渠道未纳入成本计算）`);
+  }
+  L.push("");
+  L.push("■ 上游余额");
+  L.push(...(upLines.length ? upLines : ["（暂无上游站点）"]));
+  if (ownUsers) {
+    L.push("");
+    L.push(`■ 用户余额合计：${rptCny(balanceTotal)}（预收，${ownUsers.filter((u) => u.role < 10).length} 个用户）`);
+  }
+  if (fc) {
+    L.push("");
+    L.push("■ 展望");
+    L.push(`今天预计：≈${rptCny(fc.points[0].cost * ownRate)}（区间 ${rptCny(fc.points[0].lo * ownRate)} ~ ${rptCny(fc.points[0].hi * ownRate)}）`);
+    L.push(`未来 7 天预计：≈${rptCny(fc.nextTotal * ownRate)}（区间 ${rptCny((fc.nextLo ?? 0) * ownRate)} ~ ${rptCny((fc.nextHi ?? 0) * ownRate)}）`);
+    L.push(`（${fc.method} · 基于 ${fc.sampleDays} 天 · 回测日均偏差 ±${fc.backtestWapePct ?? "?"}%）`);
+  }
+  return { title: `【日报】${own.name} ${dateLabel}`, text: L.join("\n") };
+}
+
+function reportChannels() {
+  const cfg = store.settings.dailyReport || {};
+  const ids = Array.isArray(cfg.channelIds) ? cfg.channelIds : [];
+  return store.channels.filter((c) => c.enabled !== false && (!ids.length || ids.includes(c.id)));
+}
+
+app.post("/api/report/preview", async (req, res) => {
+  try {
+    res.json(await buildDailyReport());
+  } catch (err) {
+    res.status(400).json({ error: err?.message || String(err) });
+  }
+});
+
+app.post("/api/report/send", async (req, res) => {
+  try {
+    const { title, text } = await buildDailyReport();
+    const results = await broadcast(reportChannels(), title, text, { event: "daily-report" });
+    res.json({ ok: true, results });
+  } catch (err) {
+    res.status(400).json({ error: err?.message || String(err) });
+  }
+});
+
+// 调度：每 30 秒检查（HH:MM 命中且当天未发送）
+setInterval(async () => {
+  const cfg = store.settings.dailyReport;
+  if (!cfg?.enabled || !cfg.time) return;
+  const now = new Date();
+  const hhmm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+  const today = new Intl.DateTimeFormat("en-CA").format(now);
+  if (hhmm !== cfg.time || cfg.lastSent === today) return;
+  cfg.lastSent = today; // 先占位，避免同一分钟重复发送
+  await store.save();
+  try {
+    const { title, text } = await buildDailyReport();
+    await broadcast(reportChannels(), title, text, { event: "daily-report" });
+    console.log(`日报已发送（${today} ${cfg.time}）`);
+  } catch (err) {
+    console.error("日报发送失败:", err?.message);
+  }
+}, 30000);
+
 // ---- 通知渠道 ----------------------------------------------------------------
 app.get("/api/notifications", (req, res) => {
   res.json({ channels: store.channels, rules: store.rules, channelTypes: CHANNEL_TYPES });
@@ -798,6 +978,8 @@ app.put("/api/settings", async (req, res) => {
     patch.refreshIntervalSec = Math.max(10, Number(req.body.refreshIntervalSec) || 60);
   if (req.body?.lowBalanceUsd != null)
     patch.lowBalanceUsd = Math.max(0, Number(req.body.lowBalanceUsd) || 0);
+  if (req.body?.dailyReport && typeof req.body.dailyReport === "object")
+    patch.dailyReport = req.body.dailyReport; // store 内部做字段校验合并
   const settings = await store.updateSettings(patch);
   restartPolling();
   // 立即刷新一轮：重置定时器后第一次触发要等满整个周期，不主动刷会显得设置没生效

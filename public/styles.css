@@ -340,6 +340,15 @@ button { font-family: inherit; cursor: pointer; }
 .u-table td.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 .u-table td.u-empty { text-align: center; color: var(--text-tertiary); padding: 28px; }
 
+/* ---- 日报 ---- */
+.dr-channels { display: flex; flex-wrap: wrap; gap: 6px 16px; max-width: 460px; justify-content: flex-end; }
+.report-pre {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+  line-height: 1.7; white-space: pre-wrap; word-break: break-all;
+  background: var(--bg-muted); border: 1px solid var(--border); border-radius: 8px; padding: 14px;
+  max-height: 60vh; overflow: auto;
+}
+
 /* ---- 固定成本付费记录编辑器 ---- */
 .purchase-row { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
 .purchase-row .input { height: 32px; }

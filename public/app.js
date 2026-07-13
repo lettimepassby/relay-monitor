@@ -63,6 +63,8 @@ const api = {
   removeChannel: (id) => call("/api/notifications/channels/" + id, { method: "DELETE" }),
   testChannel: (b) => call("/api/notifications/test", { body: b }),
   saveRules: (b) => call("/api/notifications/rules", { method: "PUT", body: b }),
+  reportPreview: () => call("/api/report/preview", { method: "POST", body: {} }),
+  reportSend: () => call("/api/report/send", { method: "POST", body: {} }),
   login: (b) => call("/api/auth/login", { body: b }),
   logout: () => call("/api/auth/logout", { method: "POST", body: {} }),
   changePassword: (b) => call("/api/auth/password", { body: b }),
@@ -609,7 +611,33 @@ function renderNotify() {
         <div><div class="set-title">保存规则</div><div class="set-desc">应用阈值与间隔修改</div></div>
         <button class="btn btn-primary" id="rulesSave">保存</button>
       </div>
+    </div>
+    <div class="section-head" style="margin-top:20px"><h2>每日日报</h2>
+      <span class="muted">定时汇总昨日「我的站点」经营情况并推送（时间按服务器时区）</span></div>
+    <div class="panel settings-list">
+      <div class="set-row">
+        <div><div class="set-title">启用日报</div><div class="set-desc">每天在设定时间生成并发送昨日报告</div></div>
+        <button class="toggle ${state.settings.dailyReport?.enabled ? "on" : ""}" id="dr-enabled"></button>
+      </div>
+      <div class="set-row">
+        <div><div class="set-title">发送时间</div><div class="set-desc">服务器时区的每日时刻</div></div>
+        <div class="field-inline"><input type="time" class="input small" style="width:112px;text-align:center" id="dr-time" value="${esc(state.settings.dailyReport?.time || "09:00")}"></div>
+      </div>
+      <div class="set-row">
+        <div><div class="set-title">发送渠道</div><div class="set-desc">不勾选 = 所有启用的渠道；日报较长，建议勾选邮件渠道</div></div>
+        <div class="dr-channels">${state.channels.map((c) =>
+          `<label class="chk-line"><input type="checkbox" data-drch="${c.id}"${(state.settings.dailyReport?.channelIds || []).includes(c.id) ? " checked" : ""}> ${esc(c.name)}</label>`).join("") || '<span class="muted">先添加通知渠道</span>'}</div>
+      </div>
+      <div class="set-row">
+        <div><div class="set-title">保存与测试</div><div class="set-desc">预览按当前数据生成的报告，或立即发送一次</div></div>
+        <div class="field-inline">
+          <button class="btn btn-ghost" id="dr-preview">预览</button>
+          <button class="btn btn-ghost" id="dr-send">立即发送</button>
+          <button class="btn btn-primary" id="dr-save">保存</button>
+        </div>
+      </div>
     </div>`;
+  $("#dr-enabled").onclick = () => $("#dr-enabled").classList.toggle("on");
 
   // 切换单位时把输入值换算过去（两个单位间必然是互换）
   $("#rule-etaUnit").onchange = () => {
@@ -1588,6 +1616,8 @@ async function openTrend(station) {
 }
 $("#trendClose").onclick = () => $("#trendModal").classList.remove("open");
 backdropClose("trendModal", () => $("#trendModal").classList.remove("open"));
+$("#reportClose").onclick = () => $("#reportModal").classList.remove("open");
+backdropClose("reportModal", () => $("#reportModal").classList.remove("open"));
 
 function niceStep(rough) {
   const pow = Math.pow(10, Math.floor(Math.log10(rough || 1)));
@@ -1773,6 +1803,45 @@ $(".main").addEventListener("click", async (e) => {
       $("#rule-renotify").value = state.rules.renotifyHours;
       toast("规则已保存");
     } catch (err) { toast(err.message, "err"); }
+    return;
+  }
+
+  // 日报：保存 / 预览 / 立即发送
+  if (e.target.closest("#dr-save")) {
+    try {
+      const channelIds = [...document.querySelectorAll("[data-drch]:checked")].map((el) => el.dataset.drch);
+      const r = await api.saveSettings({
+        dailyReport: {
+          enabled: $("#dr-enabled").classList.contains("on"),
+          time: $("#dr-time").value || "09:00",
+          channelIds,
+        },
+      });
+      state.settings = r.settings;
+      toast("日报设置已保存");
+    } catch (err) { toast(err.message, "err"); }
+    return;
+  }
+  const drPreview = e.target.closest("#dr-preview");
+  if (drPreview) {
+    drPreview.disabled = true;
+    try {
+      const r = await api.reportPreview();
+      $("#reportText").textContent = r.text;
+      $("#reportModal").classList.add("open");
+    } catch (err) { toast(err.message, "err"); }
+    finally { drPreview.disabled = false; }
+    return;
+  }
+  const drSend = e.target.closest("#dr-send");
+  if (drSend) {
+    drSend.disabled = true;
+    try {
+      const r = await api.reportSend();
+      const ok = r.results.filter((x) => x.ok).length;
+      toast(`日报已发送：${ok}/${r.results.length} 个渠道成功`, ok ? "ok" : "err");
+    } catch (err) { toast(err.message, "err"); }
+    finally { drSend.disabled = false; }
     return;
   }
 
