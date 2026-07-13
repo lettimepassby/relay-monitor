@@ -89,21 +89,25 @@ button { font-family: inherit; cursor: pointer; }
 
 .main { flex: 1; display: flex; flex-direction: column; min-width: 0; overflow: hidden; position: relative; }
 
-/* 我的站点页右侧悬浮目录 */
+/* 我的站点页右侧目录：内容区让出右侧通道，目录不遮挡数据 */
+.content.has-toc { padding-right: 122px; }
 .own-toc {
-  position: absolute; right: 12px; top: 116px; z-index: 12;
+  position: absolute; right: 12px; top: 116px; z-index: 12; width: 98px;
   display: flex; flex-direction: column; gap: 2px; padding: 6px;
-  background: color-mix(in srgb, var(--bg-surface) 86%, transparent);
-  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  background: var(--bg-surface);
   border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow-card);
 }
 .own-toc a {
   font-size: 11.5px; color: var(--text-tertiary); padding: 4px 10px;
   border-radius: 6px; cursor: pointer; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
 }
 .own-toc a:hover { background: var(--bg-hover); color: var(--text-primary); }
 .own-toc a.active { background: var(--bg-selected); color: var(--primary); font-weight: 500; }
-@media (max-width: 1080px) { .own-toc { display: none; } }
+@media (max-width: 1080px) {
+  .own-toc { display: none; }
+  .content.has-toc { padding-right: var(--content-padding); }
+}
 .page-header {
   padding: 18px var(--content-padding) 0; display: flex; align-items: flex-start;
   justify-content: space-between; gap: 12px; flex-shrink: 0;
@@ -334,6 +338,12 @@ button { font-family: inherit; cursor: pointer; }
 .u-table tr:last-child td { border-bottom: none; }
 .u-table td.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 .u-table td.u-empty { text-align: center; color: var(--text-tertiary); padding: 28px; }
+
+/* ---- 固定成本付费记录编辑器 ---- */
+.purchase-row { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
+.purchase-row .input { height: 32px; }
+.purchase-row [data-p="amount"] { flex: 1; }
+.purchase-row .icon-btn { flex-shrink: 0; }
 
 /* ---- 我的站点：预测图与勾选框 ---- */
 .chk-line { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-primary); cursor: pointer; }

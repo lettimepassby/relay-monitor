@@ -154,15 +154,12 @@
           <div class="hint">面板金额将按此汇率折算成人民币展示；余额告警仍按站点余额判断。</div>
         </div>
         <div class="form-field" id="f-fixedWrap">
-          <label>固定成本（每次付费金额 + 覆盖天数 + 购买日期）</label>
-          <div class="field-inline">
-            <input class="input" id="f-fixedCost" placeholder="每次付多少（¥）" style="flex:1" />
-            <input class="input" id="f-fixedDays" placeholder="管多少天" style="width:96px" />
-            <input class="input" type="date" id="f-fixedStart" style="width:150px" />
-          </div>
-          <div class="hint">日均成本 = 金额 ÷ 天数，从购买日起摊销，到期后不再计成本（续费改日期即可）。
-            不访问任何接口；站点地址可留空。填上游地址可与「我的站点」渠道自动匹配——
-            只填主机（如 1.2.3.4，不带端口）可匹配该主机所有端口的渠道。</div>
+          <label>固定成本付费记录（可叠加多笔）</label>
+          <div id="f-purchases"></div>
+          <button type="button" class="btn btn-ghost" id="f-addPurchase" style="margin-top:2px">＋ 追加一笔</button>
+          <div class="hint">每笔 = 金额 ÷ 天数 按天摊销，从购买日起生效、到期归零；多笔重叠期间成本叠加
+            （在现有套餐上加购/续费就追加一笔）。不访问任何接口；站点地址可留空，
+            填主机（不带端口）可匹配该主机所有端口的渠道。</div>
         </div>
         <div class="form-field" id="f-own-wrap">
           <label class="chk-line"><input type="checkbox" id="f-own" /> 这是我自己的中转站</label>

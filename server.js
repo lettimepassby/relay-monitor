@@ -6,7 +6,7 @@ import { readFile } from "node:fs/promises";
 import { Store } from "./lib/store.js";
 import {
   queryStation, queryStationUsage, queryOwnData, queryOwnChannels, queryOwnUsers,
-  dateStrInTz, parseDateLabel, dailyFixedCny, STATION_TYPES,
+  dateStrInTz, parseDateLabel, fixedPurchases, STATION_TYPES,
 } from "./lib/providers.js";
 import { forecastDaily } from "./lib/forecast.js";
 import { SessionManager, verifyPassword } from "./lib/auth.js";
@@ -649,32 +649,43 @@ async function computeProfit(own, incomeUsd, adminUsageUsd, { startMs, now, tz, 
     const rateOf = (s) => (s.cnyPerUsd != null && s.cnyPerUsd > 0 ? s.cnyPerUsd : 1);
 
     // 固定成本：无论是否匹配到渠道都计入（服务器租金这类可以完全不填地址）。
-    // 配置了购买日期的，只对 [购买日, 购买日+天数] 与展示窗口的重叠部分摊销，到期归零
+    // 每笔付费按 [购买日, 购买日+天数] 与展示窗口的重叠部分摊销，多笔叠加求和；
+    // 没填日期的按全窗口摊销（自动续费的常驻成本）
     const costs = [];
     for (const s of upstreams) {
-      const df = dailyFixedCny(s);
-      if (df == null) continue;
-      let activeDays = windowDays;
-      let note = null;
-      if (s.fixedStartDate) {
-        const st = parseDateLabel(s.fixedStartDate, tz);
-        if (st != null) {
-          const end = st + s.fixedDays * 86400000;
-          activeDays = Math.max(0, Math.min(now, end) - Math.max(startMs, st)) / 86400000;
-          if (end <= now) note = "已到期";
-          else if (st > startMs) note = `${s.fixedStartDate} 起`;
+      const purchases = fixedPurchases(s);
+      if (!purchases.length) continue;
+      let cnySum = 0, active = 0, expired = 0;
+      for (const p of purchases) {
+        const daily = p.amount / p.days;
+        const st = p.startDate ? parseDateLabel(p.startDate, tz) : null;
+        if (st == null) {
+          cnySum += daily * windowDays;
+          active++;
+          continue;
         }
+        const end = st + p.days * 86400000;
+        cnySum += daily * (Math.max(0, Math.min(now, end) - Math.max(startMs, st)) / 86400000);
+        if (end <= now) expired++;
+        else if (st <= now) active++;
+      }
+      let note = null;
+      if (expired === purchases.length) note = purchases.length > 1 ? "已全部到期" : "已到期";
+      else if (purchases.length > 1) note = `${active}/${purchases.length} 笔生效中`;
+      else if (purchases[0].startDate) {
+        const st0 = parseDateLabel(purchases[0].startDate, tz);
+        if (st0 != null && st0 > startMs) note = `${purchases[0].startDate} 起`;
       }
       costs.push({
         stationId: s.id, name: s.name, mode: "fixed", note,
         channels: matched.get(s.id)?.channels || ["未匹配渠道 · 通用成本"],
-        cny: r2(df * activeDays),
+        cny: r2(cnySum),
       });
     }
     // 按用量：匹配到渠道且未配置固定成本的上游
     const usageCosts = await Promise.all(
       [...matched.values()]
-        .filter(({ station }) => dailyFixedCny(station) == null && station.type !== "fixed")
+        .filter(({ station }) => fixedPurchases(station).length === 0 && station.type !== "fixed")
         .map(async ({ station, channels: chNames }) => {
           const item = { stationId: station.id, name: station.name, channels: chNames };
           try {

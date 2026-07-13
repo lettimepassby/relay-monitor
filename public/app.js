@@ -187,20 +187,30 @@ function sparkSvg(pts) {
 }
 
 function stationRow(s) {
-  // 固定成本渠道：不访问接口，只展示摊销信息
+  // 固定成本渠道：不访问接口，展示当前生效各笔的摊销汇总
   if (s.type === "fixed") {
-    const daily = s.fixedCostCny > 0 && s.fixedDays > 0 ? s.fixedCostCny / s.fixedDays : 0;
-    const pieces = [`<span>日均摊销 ${cny(daily)}</span>`, `<span>每次 ${cny(s.fixedCostCny || 0)} 管 ${s.fixedDays || 0} 天</span>`];
-    let expired = false;
-    if (s.fixedStartDate && s.fixedDays > 0) {
-      const start = new Date(s.fixedStartDate + "T00:00:00");
-      const end = start.getTime() + s.fixedDays * 86400000;
-      const remain = Math.ceil((end - Date.now()) / 86400000);
-      expired = remain <= 0;
-      pieces.push(expired
-        ? `<span class="danger">已于 ${fmtClock(end).split(" ")[0]} 到期，续费请更新日期</span>`
-        : `<span${remain <= 3 ? ' class="warn"' : ""}>${esc(s.fixedStartDate)} 起 · 剩 ${remain} 天</span>`);
+    const ps = Array.isArray(s.fixedPurchases) ? s.fixedPurchases : [];
+    const nowMs = Date.now();
+    let daily = 0, active = 0, pendingStart = 0, nextEnd = null;
+    for (const p of ps) {
+      const d = p.amount > 0 && p.days > 0 ? p.amount / p.days : 0;
+      if (!p.startDate) { daily += d; active++; continue; }
+      const st = Date.parse(p.startDate + "T00:00:00");
+      const end = st + p.days * 86400000;
+      if (st > nowMs) { pendingStart++; continue; }
+      if (end > nowMs) {
+        daily += d; active++;
+        if (nextEnd == null || end < nextEnd) nextEnd = end;
+      }
     }
+    const expiredAll = ps.length > 0 && active === 0 && pendingStart === 0;
+    const pieces = [`<span>日均摊销 ${cny(daily)}</span>`, `<span>生效 ${active}/${ps.length} 笔</span>`];
+    if (pendingStart) pieces.push(`<span>待生效 ${pendingStart} 笔</span>`);
+    if (nextEnd != null) {
+      const remain = Math.ceil((nextEnd - nowMs) / 86400000);
+      pieces.push(`<span${remain <= 3 ? ' class="warn"' : ""}>最近一笔 ${fmtClock(nextEnd).split(" ")[0]} 到期（剩 ${remain} 天）</span>`);
+    }
+    if (expiredAll) pieces.push('<span class="danger">已全部到期，续费请追加付费记录</span>');
     return `
   <div class="st-row" data-id="${s.id}">
     <div class="st-plate">¥</div>
@@ -210,8 +220,8 @@ function stationRow(s) {
       <div class="st-predict">${pieces.join("<span>·</span>")}</div>
     </div>
     <div class="st-balance">
-      <div class="amt${expired ? " danger" : ""}">${cny(expired ? 0 : daily)}</div>
-      <div class="sub">${expired ? "已到期" : "每天"}</div>
+      <div class="amt${expiredAll ? " danger" : ""}">${cny(daily)}</div>
+      <div class="sub">${expiredAll ? "已到期" : "每天"}</div>
     </div>
     <div class="st-actions">
       <button class="icon-btn" data-act="edit" title="编辑"><svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></button>
@@ -1277,6 +1287,7 @@ function render() {
   $("#pageTitle").textContent = titles[state.view][0];
   $("#pageSub").textContent = titles[state.view][1];
   if (state.view !== "own") document.querySelector(".own-toc")?.remove();
+  $("#content").classList.toggle("has-toc", state.view === "own");
   document.querySelectorAll(".nav-item").forEach((n) => n.classList.toggle("active", n.dataset.view === state.view));
   if (state.view === "dashboard") renderDashboard();
   else if (state.view === "stations") renderStations();
@@ -1305,10 +1316,7 @@ function openModal(station) {
   $("#f-password").value = "";
   $("#f-lowBalance").value = station?.lowBalanceUsd ?? "";
   $("#f-cnyRate").value = station?.cnyPerUsd ?? "";
-  $("#f-fixedCost").value = station?.fixedCostCny ?? "";
-  $("#f-fixedDays").value = station?.fixedDays ?? "";
-  // 新建默认今天；编辑回显已存日期（本地时区的 YYYY-MM-DD）
-  $("#f-fixedStart").value = station ? (station.fixedStartDate || "") : new Date().toLocaleDateString("en-CA");
+  seedPurchaseRows(station?.fixedPurchases);
   $("#f-own").checked = !!station?.isOwn;
   if (station) {
     $("#f-accessToken").placeholder = station.hasAccessToken ? "已配置，留空保持不变" : "令牌 / JWT";
@@ -1349,6 +1357,34 @@ function syncCredFields() {
 }
 $("#f-type").onchange = syncCredFields;
 
+// ---- 固定成本付费记录编辑器 ---------------------------------------------------
+function purchaseRowEl(p = {}) {
+  const row = document.createElement("div");
+  row.className = "purchase-row";
+  row.innerHTML = `
+    <input class="input" data-p="amount" placeholder="金额（¥）" value="${p.amount ?? ""}" />
+    <input class="input" data-p="days" placeholder="天数" value="${p.days ?? ""}" style="width:76px" />
+    <input class="input" type="date" data-p="startDate" value="${p.startDate ?? ""}" style="width:148px" />
+    <button type="button" class="icon-btn" data-p="del" title="删除这笔"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button>`;
+  row.querySelector('[data-p="del"]').onclick = () => row.remove();
+  return row;
+}
+function seedPurchaseRows(list) {
+  const box = $("#f-purchases");
+  box.innerHTML = "";
+  const rows = list && list.length ? list : [{ startDate: new Date().toLocaleDateString("en-CA") }];
+  rows.forEach((p) => box.appendChild(purchaseRowEl(p)));
+}
+$("#f-addPurchase").onclick = () =>
+  $("#f-purchases").appendChild(purchaseRowEl({ startDate: new Date().toLocaleDateString("en-CA") }));
+function collectPurchases() {
+  return [...document.querySelectorAll("#f-purchases .purchase-row")].map((r) => ({
+    amount: r.querySelector('[data-p="amount"]').value.trim(),
+    days: r.querySelector('[data-p="days"]').value.trim(),
+    startDate: r.querySelector('[data-p="startDate"]').value,
+  })).filter((p) => p.amount !== "" || p.days !== "");
+}
+
 $("#modalSave").onclick = async () => {
   const payload = {
     name: $("#f-name").value.trim(),
@@ -1358,9 +1394,7 @@ $("#modalSave").onclick = async () => {
     email: $("#f-email").value.trim(),
     lowBalanceUsd: $("#f-lowBalance").value.trim(),
     cnyPerUsd: $("#f-cnyRate").value.trim(),
-    fixedCostCny: $("#f-fixedCost").value.trim(),
-    fixedDays: $("#f-fixedDays").value.trim(),
-    fixedStartDate: $("#f-fixedStart").value,
+    fixedPurchases: collectPurchases(),
     isOwn: $("#f-type").value === "newapi" && $("#f-own").checked,
   };
   const at = $("#f-accessToken").value.trim();
@@ -1370,8 +1404,9 @@ $("#modalSave").onclick = async () => {
   if (ak) payload.apiKey = ak;
   if (pw) payload.password = pw;
   if (payload.type === "fixed") {
-    if (!(Number(payload.fixedCostCny) > 0)) return toast("请填写每次付费金额", "err");
-    if (!(Number(payload.fixedDays) > 0)) return toast("请填写覆盖天数", "err");
+    const bad = payload.fixedPurchases.find((p) => !(Number(p.amount) > 0) || !(Number(p.days) > 0));
+    if (bad) return toast("每笔付费需填写金额与天数（均大于 0）", "err");
+    if (!payload.fixedPurchases.length) return toast("请至少填写一笔付费记录", "err");
   } else if (!payload.baseUrl) {
     return toast("请填写站点地址", "err");
   }
