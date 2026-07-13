@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>中转站余额监控</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- 登录屏 -->
+  <div class="login-screen" id="loginScreen" hidden>
+    <div class="login-card">
+      <div class="login-brand">
+        <div class="brand-logo big">
+          <svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/></svg>
+        </div>
+        <h1>中转站余额监控</h1>
+        <p>请登录以继续</p>
+      </div>
+      <form id="loginForm">
+        <div class="form-field">
+          <label>用户名</label>
+          <input class="input" id="login-username" autocomplete="username" value="admin" />
+        </div>
+        <div class="form-field">
+          <label>密码</label>
+          <input class="input" id="login-password" type="password" autocomplete="current-password" placeholder="默认 admin123" />
+        </div>
+        <div class="login-error" id="loginError" hidden></div>
+        <button class="btn btn-primary login-btn" type="submit">登 录</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="window" id="appWindow">
+    <!-- 标题栏 -->
+    <header class="titlebar">
+      <div class="traffic"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+      <div class="titlebar-title">中转站余额监控</div>
+      <div class="titlebar-actions">
+        <button class="icon-btn" id="refreshBtn" title="刷新全部" aria-label="刷新全部">
+          <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+        </button>
+        <button class="icon-btn" id="themeToggle" aria-label="切换深浅色" title="切换深浅色"></button>
+        <button class="icon-btn" id="logoutBtn" title="退出登录" aria-label="退出登录">
+          <svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <div class="shell">
+      <!-- 侧栏 -->
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-logo">
+            <svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/></svg>
+          </div>
+          <div class="brand-text">
+            <strong>Relay Monitor</strong>
+            <span>sub2api · new-api</span>
+          </div>
+        </div>
+        <div class="nav-label">监控</div>
+        <button class="nav-item active" data-view="dashboard">
+          <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>
+          总览
+        </button>
+        <button class="nav-item" data-view="stations">
+          <svg viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="6" rx="2"/><rect x="2" y="14" width="20" height="6" rx="2"/><path d="M6 7h.01M6 17h.01"/></svg>
+          中转站
+        </button>
+        <button class="nav-item" data-view="notify">
+          <svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+          通知
+        </button>
+        <div class="nav-label" style="margin-top:12px">系统</div>
+        <button class="nav-item" data-view="settings">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          设置
+        </button>
+        <div class="sidebar-foot" id="lastSync">—</div>
+      </aside>
+
+      <!-- 主区 -->
+      <main class="main">
+        <div class="page-header">
+          <div>
+            <h1 id="pageTitle">总览</h1>
+            <p id="pageSub">跨中转站的余额与用量一览</p>
+          </div>
+          <div class="header-actions" id="headerActions"></div>
+        </div>
+        <div class="content" id="content"></div>
+      </main>
+    </div>
+  </div>
+
+  <!-- 新增/编辑中转站弹窗 -->
+  <div class="overlay" id="modal">
+    <div class="modal">
+      <div class="modal-head">
+        <h2 id="modalTitle">添加中转站</h2>
+        <p>凭证仅保存在本机，用于向该中转站查询余额。</p>
+      </div>
+      <div class="modal-body">
+        <div class="form-field">
+          <label>名称</label>
+          <input class="input" id="f-name" placeholder="例如：某某中转站" />
+        </div>
+        <div class="form-field">
+          <label>类型</label>
+          <select class="select" id="f-type"></select>
+          <div class="hint" id="f-type-hint"></div>
+        </div>
+        <div class="form-field">
+          <label>站点地址</label>
+          <input class="input" id="f-baseUrl" placeholder="https://your-relay.com" />
+        </div>
+        <div class="form-field" data-cred="accessToken">
+          <label id="l-accessToken">访问令牌</label>
+          <input class="input" id="f-accessToken" placeholder="令牌 / JWT" />
+        </div>
+        <div class="form-field" data-cred="userId">
+          <label>用户 ID（New-Api-User）</label>
+          <input class="input" id="f-userId" placeholder="例如 1" />
+        </div>
+        <div class="form-field" data-cred="apiKey">
+          <label>API 密钥</label>
+          <input class="input" id="f-apiKey" placeholder="sk-..." />
+        </div>
+        <div class="form-field" data-cred="email">
+          <label>登录邮箱</label>
+          <input class="input" id="f-email" placeholder="you@example.com" />
+        </div>
+        <div class="form-field" data-cred="password">
+          <label>登录密码</label>
+          <input class="input" id="f-password" type="password" placeholder="站点的登录密码" />
+        </div>
+        <div class="form-field">
+          <label>低余额告警阈值（美元，可留空）</label>
+          <input class="input" id="f-lowBalance" placeholder="留空则用全局阈值" />
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-secondary" id="modalCancel">取消</button>
+        <button class="btn btn-primary" id="modalSave">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 通知渠道弹窗 -->
+  <div class="overlay" id="chModal">
+    <div class="modal">
+      <div class="modal-head">
+        <h2 id="chModalTitle">添加通知渠道</h2>
+        <p>告警触发时将推送到所有启用的渠道。</p>
+      </div>
+      <div class="modal-body">
+        <div class="form-field">
+          <label>名称</label>
+          <input class="input" id="ch-name" placeholder="例如：运维 Telegram 群" />
+        </div>
+        <div class="form-field">
+          <label>渠道类型</label>
+          <select class="select" id="ch-type"></select>
+        </div>
+        <div id="ch-fields"></div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-ghost" id="chTest">发送测试</button>
+        <span style="flex:1"></span>
+        <button class="btn btn-secondary" id="chCancel">取消</button>
+        <button class="btn btn-primary" id="chSave">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 趋势弹窗 -->
+  <div class="overlay" id="trendModal">
+    <div class="modal modal-wide">
+      <div class="modal-head">
+        <h2 id="trendTitle">余额趋势</h2>
+        <p id="trendSub">最近 72 小时的余额变化与耗尽预测</p>
+      </div>
+      <div class="modal-body">
+        <div class="trend-stats" id="trendStats"></div>
+        <div class="chart-wrap" id="trendChart"></div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-secondary" id="trendClose">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast-wrap" id="toasts"></div>
+  <script src="app.js"></script>
+</body>
+</html>

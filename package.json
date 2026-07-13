@@ -1,0 +1,18 @@
+{
+  "name": "relay-monitor",
+  "version": "1.0.0",
+  "private": true,
+  "description": "监控 sub2api / new-api 中转站余额的网页面板",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
