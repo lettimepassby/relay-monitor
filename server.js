@@ -6,7 +6,7 @@ import { readFile } from "node:fs/promises";
 import { Store } from "./lib/store.js";
 import {
   queryStation, queryStationUsage, queryOwnData, queryOwnChannels,
-  dateStrInTz, parseDateLabel, STATION_TYPES,
+  dateStrInTz, parseDateLabel, dailyFixedCny, STATION_TYPES,
 } from "./lib/providers.js";
 import { forecastDaily } from "./lib/forecast.js";
 import { SessionManager, verifyPassword } from "./lib/auth.js";
@@ -250,6 +250,7 @@ async function seedDemo() {
 // 并发会重复发告警、并让 Sub2API 轮换的 refresh_token 相互作废
 const inflightRefresh = new Map();
 function refreshOne(station) {
+  if (station.type === "fixed") return Promise.resolve(null); // 固定成本渠道不访问任何接口
   const running = inflightRefresh.get(station.id);
   if (running) return running;
   const p = doRefreshOne(station).finally(() => inflightRefresh.delete(station.id));
@@ -351,7 +352,7 @@ app.post("/api/stations", async (req, res) => {
   const b = req.body || {};
   if (!b.type || !STATION_TYPES.some((t) => t.value === b.type))
     return res.status(400).json({ error: "无效的中转站类型" });
-  if (!b.baseUrl) return res.status(400).json({ error: "请填写站点地址" });
+  if (!b.baseUrl && b.type !== "fixed") return res.status(400).json({ error: "请填写站点地址" });
   const s = await store.add(b);
   refreshOne(s).catch(() => {});
   res.json({ station: redact(s) });
@@ -443,7 +444,7 @@ app.get("/api/usage", async (req, res) => {
   }
   const endMs = now;
 
-  const stations = await Promise.all(store.list().map(async (s) => {
+  const stations = await Promise.all(store.list().filter((s) => s.type !== "fixed").map(async (s) => {
     const meta = { id: s.id, name: s.name, type: s.type, cnyPerUsd: s.cnyPerUsd ?? null, isOwn: !!s.isOwn };
     try {
       const u = await queryStationUsage(s, {
@@ -597,21 +598,36 @@ async function computeProfit(own, incomeUsd, { startMs, now, tz, range }) {
 
     const windowDays = (now - startMs) / 86400000;
     const rateOf = (s) => (s.cnyPerUsd != null && s.cnyPerUsd > 0 ? s.cnyPerUsd : 1);
-    const costs = await Promise.all([...matched.values()].map(async ({ station, channels: chNames }) => {
-      const item = { stationId: station.id, name: station.name, channels: chNames };
-      if (station.fixedMonthlyCny != null && station.fixedMonthlyCny > 0) {
-        return { ...item, mode: "fixed", cny: r2((station.fixedMonthlyCny / 30) * windowDays) };
-      }
-      try {
-        const u = await queryStationUsage(station, {
-          startMs, endMs: now, granularity: "day", tz, wantToday: range === "today",
-        });
-        const usd = range === "today" && u.summary ? u.summary.cost : u.models.reduce((a, m) => a + m.cost, 0);
-        return { ...item, mode: "usage", cny: r2(usd * rateOf(station)) };
-      } catch {
-        return { ...item, mode: "history", cny: r2(history.usedSince(station.id, startMs) * rateOf(station)) };
-      }
-    }));
+
+    // 固定成本：无论是否匹配到渠道都计入（服务器租金这类可以完全不填地址）
+    const costs = [];
+    for (const s of upstreams) {
+      const df = dailyFixedCny(s);
+      if (df == null) continue;
+      costs.push({
+        stationId: s.id, name: s.name, mode: "fixed",
+        channels: matched.get(s.id)?.channels || ["未匹配渠道 · 通用成本"],
+        cny: r2(df * windowDays),
+      });
+    }
+    // 按用量：匹配到渠道且未配置固定成本的上游
+    const usageCosts = await Promise.all(
+      [...matched.values()]
+        .filter(({ station }) => dailyFixedCny(station) == null && station.type !== "fixed")
+        .map(async ({ station, channels: chNames }) => {
+          const item = { stationId: station.id, name: station.name, channels: chNames };
+          try {
+            const u = await queryStationUsage(station, {
+              startMs, endMs: now, granularity: "day", tz, wantToday: range === "today",
+            });
+            const usd = range === "today" && u.summary ? u.summary.cost : u.models.reduce((a, m) => a + m.cost, 0);
+            return { ...item, mode: "usage", cny: r2(usd * rateOf(station)) };
+          } catch {
+            return { ...item, mode: "history", cny: r2(history.usedSince(station.id, startMs) * rateOf(station)) };
+          }
+        })
+    );
+    costs.push(...usageCosts);
 
     const ownRate = own.cnyPerUsd != null && own.cnyPerUsd > 0 ? own.cnyPerUsd : 1;
     const incomeCny = r2(incomeUsd * ownRate);

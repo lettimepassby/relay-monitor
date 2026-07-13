@@ -187,6 +187,27 @@ function sparkSvg(pts) {
 }
 
 function stationRow(s) {
+  // 固定成本渠道：不访问接口，只展示摊销信息
+  if (s.type === "fixed") {
+    const daily = s.fixedCostCny > 0 && s.fixedDays > 0 ? s.fixedCostCny / s.fixedDays : 0;
+    return `
+  <div class="st-row" data-id="${s.id}">
+    <div class="st-plate">¥</div>
+    <div class="st-main" style="cursor:default">
+      <div class="st-name">${esc(s.name)}<span class="demo-tag">固定成本</span></div>
+      <div class="st-meta">${s.baseUrl ? esc(s.baseUrl) + " · " : ""}不访问接口 · 仅计入利润成本</div>
+      <div class="st-predict"><span>日均摊销 ${cny(daily)}</span><span>·</span><span>每次 ${cny(s.fixedCostCny || 0)} 管 ${s.fixedDays || 0} 天</span></div>
+    </div>
+    <div class="st-balance">
+      <div class="amt">${cny(daily)}</div>
+      <div class="sub">每天</div>
+    </div>
+    <div class="st-actions">
+      <button class="icon-btn" data-act="edit" title="编辑"><svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></button>
+      <button class="icon-btn" data-act="delete" title="删除"><svg viewBox="0 0 24 24"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg></button>
+    </div>
+  </div>`;
+  }
   const st = statusOf(s);
   const b = s.balance;
   const rate = rateOf(s);
@@ -596,7 +617,7 @@ function renderUsage() {
         `<button data-range="${v}" class="${state.usageRange === v ? "active" : ""}">${l}</button>`).join("")}</div>
       <select class="select usage-station" id="usageStation">
         <option value="all">全部上游站点</option>
-        ${state.stations.map((s) => `<option value="${s.id}"${state.usageStation === s.id ? " selected" : ""}>${esc(s.name)}${s.isOwn ? "（我的站）" : ""}</option>`).join("")}
+        ${state.stations.filter((s) => s.type !== "fixed").map((s) => `<option value="${s.id}"${state.usageStation === s.id ? " selected" : ""}>${esc(s.name)}${s.isOwn ? "（我的站）" : ""}</option>`).join("")}
       </select>
     </div>
     <div id="usageBody"><div class="chart-empty">加载中…</div></div>`;
@@ -845,7 +866,6 @@ function renderOwn() {
     <div class="usage-filters">
       <div class="seg" id="ownRange">${OWN_RANGES.map(([v, l]) =>
         `<button data-range="${v}" class="${state.ownRange === v ? "active" : ""}">${l}</button>`).join("")}</div>
-      <span class="muted" id="ownStationName"></span>
     </div>
     <div id="ownBody"><div class="chart-empty">加载中…</div></div>`;
   loadOwn();
@@ -875,9 +895,6 @@ function renderOwnBody() {
   if (!el || !state.ownData) return;
   const d = state.ownData;
   const rate = rateOf(d.station);
-  const nameEl = $("#ownStationName");
-  if (nameEl) nameEl.textContent = `数据来源：${d.station.name}`;
-
   const totCost = d.byModel.reduce((a, m) => a + m.cost, 0) * rate;
   const totTokens = d.byModel.reduce((a, m) => a + m.tokens, 0);
   const totReqs = d.byModel.reduce((a, m) => a + m.requests, 0);
@@ -1211,7 +1228,8 @@ function openModal(station) {
   $("#f-password").value = "";
   $("#f-lowBalance").value = station?.lowBalanceUsd ?? "";
   $("#f-cnyRate").value = station?.cnyPerUsd ?? "";
-  $("#f-fixedCny").value = station?.fixedMonthlyCny ?? "";
+  $("#f-fixedCost").value = station?.fixedCostCny ?? "";
+  $("#f-fixedDays").value = station?.fixedDays ?? "";
   $("#f-own").checked = !!station?.isOwn;
   if (station) {
     $("#f-accessToken").placeholder = station.hasAccessToken ? "已配置，留空保持不变" : "令牌 / JWT";
@@ -1239,10 +1257,16 @@ function syncCredFields() {
     "newapi-key": "任意可用的 sk- 密钥；通过 OpenAI 兼容计费接口查询额度。",
     sub2api: "Sub2API 登录后的访问令牌（JWT）；过期需手动更换，推荐用账号密码模式。",
     "sub2api-password": "填 Sub2API 的登录邮箱和密码，面板会自动登录并在令牌过期时自动续期。开启 2FA 的账号不支持。",
+    fixed: "包月 / 包年等定期投入的上游：不访问任何接口，只按天摊销计入利润成本。",
   };
   $("#f-type-hint").textContent = hints[type] || "";
   $("#l-accessToken").textContent = type.startsWith("sub2api") ? "登录令牌（JWT）" : "访问令牌";
   $("#f-own-wrap").style.display = type === "newapi" ? "" : "none"; // 下游分析只支持 new-api
+  // 固定成本类型：只留名称/地址/固定成本，隐藏阈值与汇率；其他类型隐藏固定成本
+  const isFixed = type === "fixed";
+  $("#f-fixedWrap").style.display = isFixed ? "" : "none";
+  $("#f-lowBalance").closest(".form-field").style.display = isFixed ? "none" : "";
+  $("#f-cnyRate").closest(".form-field").style.display = isFixed ? "none" : "";
 }
 $("#f-type").onchange = syncCredFields;
 
@@ -1255,7 +1279,8 @@ $("#modalSave").onclick = async () => {
     email: $("#f-email").value.trim(),
     lowBalanceUsd: $("#f-lowBalance").value.trim(),
     cnyPerUsd: $("#f-cnyRate").value.trim(),
-    fixedMonthlyCny: $("#f-fixedCny").value.trim(),
+    fixedCostCny: $("#f-fixedCost").value.trim(),
+    fixedDays: $("#f-fixedDays").value.trim(),
     isOwn: $("#f-type").value === "newapi" && $("#f-own").checked,
   };
   const at = $("#f-accessToken").value.trim();
@@ -1264,7 +1289,12 @@ $("#modalSave").onclick = async () => {
   if (at) payload.accessToken = at;
   if (ak) payload.apiKey = ak;
   if (pw) payload.password = pw;
-  if (!payload.baseUrl) return toast("请填写站点地址", "err");
+  if (payload.type === "fixed") {
+    if (!(Number(payload.fixedCostCny) > 0)) return toast("请填写每次付费金额", "err");
+    if (!(Number(payload.fixedDays) > 0)) return toast("请填写覆盖天数", "err");
+  } else if (!payload.baseUrl) {
+    return toast("请填写站点地址", "err");
+  }
   try {
     if (editingId) { await api.update(editingId, payload); toast("已更新"); }
     else { await api.create(payload); toast("已添加，正在查询余额…"); }

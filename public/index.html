@@ -153,10 +153,14 @@
           <input class="input" id="f-cnyRate" placeholder="如 2 表示 $1 = ¥2，留空按 1:1" />
           <div class="hint">面板金额将按此汇率折算成人民币展示；余额告警仍按站点余额判断。</div>
         </div>
-        <div class="form-field">
-          <label>每月固定成本（¥，可留空）</label>
-          <input class="input" id="f-fixedCny" placeholder="包月/定期投入的上游填月费，如 199" />
-          <div class="hint">利润计算按天摊销（月费 ÷ 30 × 天数），并忽略该站的按用量成本。</div>
+        <div class="form-field" id="f-fixedWrap">
+          <label>固定成本（每次付费金额 + 覆盖天数）</label>
+          <div class="field-inline">
+            <input class="input" id="f-fixedCost" placeholder="每次付多少（¥），如 199" style="flex:1" />
+            <input class="input" id="f-fixedDays" placeholder="管多少天，如 30" style="width:110px" />
+          </div>
+          <div class="hint">不访问任何接口；日均成本 = 金额 ÷ 天数，均摊计入利润。
+            站点地址可留空；填上游地址可与「我的站点」渠道自动匹配。</div>
         </div>
         <div class="form-field" id="f-own-wrap">
           <label class="chk-line"><input type="checkbox" id="f-own" /> 这是我自己的中转站</label>
