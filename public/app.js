@@ -1713,6 +1713,15 @@ $("#refreshBtn").onclick = (e) => doRefreshAll(e.currentTarget);
 // 后台数据更新只在这两个数据视图上触发重绘
 const isDataView = () => state.view === "dashboard" || state.view === "stations";
 
+// 按当前视图刷新数据：用量/我的站点只替换正文区域，筛选控件不受影响；
+// 设置/通知页有表单，跳过自动重绘
+function refreshCurrentView() {
+  if (isDataView()) return reload().catch(() => {});
+  if (state.view === "usage") return loadUsage(true);
+  if (state.view === "own") return loadOwn(true);
+  return Promise.resolve();
+}
+
 async function doRefreshAll(btn) {
   btn?.classList.add("spin");
   try {
@@ -1740,8 +1749,13 @@ async function loadNotifications() {
 function startAuto() {
   if (autoTimer) clearInterval(autoTimer);
   const sec = Math.max(10, state.settings.refreshIntervalSec || 60);
-  autoTimer = setInterval(() => { if (isDataView()) reload().catch(() => {}); }, sec * 1000);
+  autoTimer = setInterval(refreshCurrentView, sec * 1000);
 }
+
+// 切回浏览器标签页时立即刷新一次，不用等下个周期
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && state.user && $("#loginScreen").hidden) refreshCurrentView();
+});
 
 async function bootData() {
   const meta = await api.meta();
