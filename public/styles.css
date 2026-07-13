@@ -175,7 +175,8 @@ button { font-family: inherit; cursor: pointer; }
 }
 .st-meta { font-size: 11.5px; color: var(--text-tertiary); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .st-bar { display: flex; align-items: center; gap: 10px; margin-top: 7px; }
-.spark { width: 170px; height: 30px; flex-shrink: 0; }
+/* 宽度自适应（移动端收窄），viewBox 等比缩放 */
+.spark { width: 100%; max-width: 170px; height: auto; flex-shrink: 1; }
 .spark-line { fill: none; stroke: var(--primary); stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; }
 .spark-area { fill: var(--primary); opacity: .08; }
 .spark-dot { fill: var(--primary); stroke: var(--bg-surface); stroke-width: 1.5; }
@@ -291,11 +292,15 @@ button { font-family: inherit; cursor: pointer; }
   .stat-card { padding: 10px 12px; }
   .stat-card .value { font-size: 18px; }
 
-  .st-bar { display: none; }
-  .st-row { gap: 10px; padding: 11px 12px; }
+  /* 站点卡片两行布局：首行 图标+信息（走势图有完整宽度），次行 余额+操作 */
+  .st-row { gap: 10px; row-gap: 8px; padding: 11px 12px; flex-wrap: wrap; }
   .st-plate { width: 32px; height: 32px; }
-  .st-balance { min-width: 84px; }
-  .st-balance .amt { font-size: 15px; }
+  .st-main { flex: 1 1 calc(100% - 42px); }
+  .st-balance { order: 3; text-align: left; min-width: 0; flex: 1; margin-left: 42px; }
+  .st-balance .amt { font-size: 16px; }
+  .st-actions { order: 4; margin-left: auto; align-self: center; }
+  .st-usage { display: none; } /* 走势图的文字说明收起，图保留 */
+  .st-predict { flex-wrap: wrap; }
 
   .usage-filters { flex-wrap: wrap; }
   .dr-channels { max-width: 100%; justify-content: flex-start; }
