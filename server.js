@@ -8,7 +8,7 @@ import {
   queryStation, queryStationUsage, queryOwnData, queryOwnChannels, queryOwnUsers,
   dateStrInTz, parseDateLabel, fixedPurchases, STATION_TYPES,
 } from "./lib/providers.js";
-import { forecastDaily } from "./lib/forecast.js";
+import { forecastDaily, forecastHourly } from "./lib/forecast.js";
 import { SessionManager, verifyPassword } from "./lib/auth.js";
 import { History } from "./lib/history.js";
 import { evaluateStation } from "./lib/alerts.js";
@@ -554,6 +554,37 @@ app.get("/api/own/analytics", async (req, res) => {
     } catch { /* 拿不到就退化为不区分管理员 */ }
     const adminSet = new Set((ownUsers || []).filter((u) => u.role >= 10).map((u) => u.username));
 
+    // 小时级序列（近 14 天，缺时补 0，不含当前未完小时）→ 未来 24 小时预测
+    const hourFmt = new Intl.DateTimeFormat("en-US", { timeZone: tz, hour12: false, hour: "2-digit" });
+    const hodOf = (ms) => Number(hourFmt.format(new Date(ms))) % 24;
+    const hmap = new Map();
+    for (const r of modelRows) {
+      const hk = Math.floor(r.t / 3600000) * 3600000;
+      hmap.set(hk, (hmap.get(hk) || 0) + r.cost);
+    }
+    const lastFullHour = Math.floor(now / 3600000) * 3600000 - 3600000;
+    const hourlyStart = Math.max(lastFullHour - 14 * 86400000, hmap.size ? Math.min(...hmap.keys()) : lastFullHour);
+    const hourlySeries = [];
+    for (let t = hourlyStart; t <= lastFullHour; t += 3600000) {
+      hourlySeries.push({ t, cost: Math.round((hmap.get(t) || 0) * 10000) / 10000 });
+    }
+    const hf = forecastHourly(hourlySeries, hodOf, 24);
+    let hourlyForecast = null;
+    if (hf) {
+      const todaySoFar = modelRows.filter((r) => r.t >= midnight).reduce((a, r) => a + r.cost, 0);
+      // 今天预计全天 = 已发生 + 预测里落在今天的剩余小时
+      const dayEndMs = midnight + 86400000;
+      const restToday = hf.points.filter((p) => p.t < dayEndMs).reduce((a, p) => a + p.cost, 0);
+      hourlyForecast = {
+        past: hourlySeries.slice(-24),
+        next: hf.points,
+        next24Total: hf.next24Total,
+        backtestWapePct: hf.backtestWapePct,
+        todaySoFar: Math.round(todaySoFar * 100) / 100,
+        todayEst: Math.round((todaySoFar + restToday) * 100) / 100,
+      };
+    }
+
     const byUser = aggBy(userRows, "user").map((u) => ({ ...u, isAdmin: adminSet.has(u.user) }));
     // 收入 = 普通用户的期内消费；管理员/root 自己用不产生收入，但上游成本照付
     const incomeUsd = byUser.filter((u) => !u.isAdmin).reduce((a, u) => a + u.cost, 0);
@@ -573,6 +604,7 @@ app.get("/api/own/analytics", async (req, res) => {
       trend: [...tmap.values()].sort((a, b) => a.t - b.t),
       daily: daily.slice(-14),
       forecast: forecastDaily(daily, 7),
+      hourly: hourlyForecast,
       profit: await computeProfit(own, incomeUsd, adminUsageUsd, { startMs, now, tz, range }),
       generatedAt: new Date().toISOString(),
     };

@@ -959,6 +959,15 @@ function renderOwnBody() {
         <div class="chart-wrap" id="ownModelChart"></div>
       </div>
     </div>
+    ${d.hourly ? `
+    <div class="charts-grid" style="grid-template-columns:1fr" data-toc="小时预测">
+      <div class="panel chart-card">
+        <div class="chart-card-head"><div><h3>未来 24 小时预测</h3><div class="chart-sub">今天已消费 ${cny(d.hourly.todaySoFar * rate)} · 全天预计 ≈${cny(d.hourly.todayEst * rate)} · 未来 24h 合计 ≈${cny(d.hourly.next24Total * rate)}${
+          d.hourly.backtestWapePct != null ? ` · 24h 总量回测偏差 ±${d.hourly.backtestWapePct}%` : ""
+        }</div></div></div>
+        <div class="chart-wrap" id="ownHourlyChart"></div>
+      </div>
+    </div>` : ""}
     <div class="charts-grid" data-toc="消费预测">
       <div class="panel chart-card">
         <div class="chart-card-head"><div><h3>消费预测</h3><div class="chart-sub">${esc(fcSub)}</div></div></div>
@@ -1000,9 +1009,60 @@ function renderOwnBody() {
   drawUsageTrend($("#ownTrendChart"), buckets);
   drawUsageModels($("#ownModelChart"), models);
   drawOwnUsers($("#ownUserChart"), users);
+  if (d.hourly) {
+    drawHourlyChart($("#ownHourlyChart"),
+      d.hourly.past.map((p) => ({ ...p, cost: p.cost * rate })),
+      d.hourly.next.map((p) => ({ ...p, cost: p.cost * rate, lo: p.lo * rate, hi: p.hi * rate })));
+  }
   drawForecast($("#ownForecastChart"), d.daily.map((x) => ({ t: x.t, cost: x.cost * rate })),
     fc ? fc.points.map((p) => ({ ...p, cost: p.cost * rate, lo: p.lo * rate, hi: p.hi * rate })) : null);
   buildOwnToc();
+}
+
+// 小时级：过去 24h 实际（实心柱）+ 未来 24h 预测（浅色柱），中间分界线
+function drawHourlyChart(wrap, past, next) {
+  const all = [...past.map((p) => ({ ...p, kind: "h" })), ...next.map((p) => ({ ...p, kind: "f" }))];
+  if (all.length < 4) { wrap.innerHTML = '<div class="chart-empty">小时数据不足</div>'; return; }
+  const W = 900, H = 200, L = 52, R = 12, T = 12, B = 26;
+  const iw = W - L - R, ih = H - T - B;
+  const n = all.length;
+  const slot = iw / n;
+  const bw = Math.max(2, Math.min(16, slot - 2));
+  const maxV = Math.max(...all.map((p) => p.kind === "f" ? Math.max(p.cost, p.hi || 0) : p.cost), 0.01);
+  const step = niceStep(maxV / 3);
+  const yMax = Math.max(step * Math.ceil((maxV * 1.05) / step), step);
+  const y = (v) => T + (1 - v / yMax) * ih;
+
+  let grid = "", labels = "";
+  for (let i = 0; i * step <= yMax + 1e-9; i++) {
+    const v = +(i * step).toFixed(6);
+    grid += `<line class="chart-grid" x1="${L}" y1="${y(v)}" x2="${W - R}" y2="${y(v)}"/>`;
+    labels += `<text class="chart-axis-label" x="${L - 6}" y="${y(v) + 3}" text-anchor="end">¥${v >= 100 ? Math.round(v) : v}</text>`;
+  }
+  const hourLabel = (t) => `${String(new Date(t).getHours()).padStart(2, "0")}:00`;
+  const cols = all.map((p, i) => {
+    const cx = L + slot * i + slot / 2;
+    const x0 = cx - bw / 2;
+    const yTop = y(p.cost);
+    const h = T + ih - yTop;
+    const r = Math.min(3, bw / 2, h);
+    const bar = h <= 0.4 ? "" :
+      `<path class="${p.kind === "f" ? "chart-bar-future" : "chart-bar"}" d="M${x0},${(yTop + r).toFixed(1)} a${r},${r} 0 0 1 ${r},-${r} h${(bw - 2 * r).toFixed(1)} a${r},${r} 0 0 1 ${r},${r} v${(h - r).toFixed(1)} h-${bw} z"/>`;
+    const lb = i % 4 === 0 ? `<text class="chart-axis-label" x="${cx}" y="${H - 8}" text-anchor="middle">${hourLabel(p.t)}</text>` : "";
+    return `<g>${bar}${lb}<rect class="u-hit" data-i="${i}" x="${L + slot * i}" y="${T}" width="${slot}" height="${ih}" fill="transparent"/></g>`;
+  }).join("");
+  // 「现在」分界线
+  const nowX = L + slot * past.length;
+  const divider = `<line class="chart-crosshair" x1="${nowX}" y1="${T}" x2="${nowX}" y2="${T + ih}"/>
+    <text class="chart-axis-label" x="${nowX + 4}" y="${T + 10}">现在</text>`;
+
+  wrap.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="未来 24 小时消费预测">${grid}${labels}${cols}${divider}</svg><div class="chart-tip"></div>`;
+  attachUsageTip(wrap, (i) => {
+    const p = all[i];
+    return p.kind === "h"
+      ? `<div class="t">${hourLabel(p.t)}（实际）</div><div class="v">${cny4(p.cost)}</div>`
+      : `<div class="t">${hourLabel(p.t)}（预测）</div><div class="v">${cny4(p.cost)}</div><div class="r"><span>区间</span><b>${cny(p.lo)} ~ ${cny(p.hi)}</b></div>`;
+  });
 }
 
 // 右侧悬浮目录：扫描 [data-toc] 区块生成跳转项，滚动时高亮当前位置
