@@ -1,6 +1,6 @@
 {
   "name": "relay-monitor",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "private": true,
   "description": "监控 sub2api / new-api 中转站余额的网页面板",
   "type": "module",

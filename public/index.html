@@ -153,6 +153,11 @@
           <input class="input" id="f-cnyRate" placeholder="如 2 表示 $1 = ¥2，留空按 1:1" />
           <div class="hint">面板金额将按此汇率折算成人民币展示；余额告警仍按站点余额判断。</div>
         </div>
+        <div class="form-field">
+          <label>每月固定成本（¥，可留空）</label>
+          <input class="input" id="f-fixedCny" placeholder="包月/定期投入的上游填月费，如 199" />
+          <div class="hint">利润计算按天摊销（月费 ÷ 30 × 天数），并忽略该站的按用量成本。</div>
+        </div>
         <div class="form-field" id="f-own-wrap">
           <label class="chk-line"><input type="checkbox" id="f-own" /> 这是我自己的中转站</label>
           <div class="hint">启用「我的站点」下游分析（分用户/分模型用量与消费预测）。需要管理员（root）账号的系统访问令牌与用户 ID。</div>

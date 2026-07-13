@@ -900,6 +900,7 @@ function renderOwnBody() {
       <div class="stat-card"><div class="label">请求数</div><div class="value">${totReqs.toLocaleString("en-US")}</div></div>
       <div class="stat-card"><div class="label">活跃用户</div><div class="value">${users.length}<small>个</small></div></div>
     </div>
+    ${profitSection(d.profit)}
     <div class="charts-grid">
       <div class="panel chart-card">
         <div class="chart-card-head"><div><h3>用量趋势</h3><div class="chart-sub">${hourly ? "按小时" : "按天"}汇总（tokens）</div></div></div>
@@ -952,6 +953,48 @@ function renderOwnBody() {
   drawOwnUsers($("#ownUserChart"), users);
   drawForecast($("#ownForecastChart"), d.daily.map((x) => ({ t: x.t, cost: x.cost * rate })),
     fc ? fc.points.map((p) => ({ ...p, cost: p.cost * rate, lo: p.lo * rate, hi: p.hi * rate })) : null);
+}
+
+// 利润区块：收入 − 匹配上游的成本；未匹配渠道单独列出
+function profitSection(p) {
+  if (!p) return "";
+  if (p.error) {
+    return `<div class="usage-errors" style="margin-bottom:14px"><span>⚠ 利润分析不可用：${esc(p.error)}</span></div>`;
+  }
+  const MODE_LABEL = { usage: "按用量", fixed: "固定摊销", history: "余额推算 ≈" };
+  const profitCls = p.profitCny >= 0 ? "good" : "danger";
+  const costRows = p.costs.map((c) => `
+    <div class="st-row profit-row">
+      <div class="st-main" style="cursor:default">
+        <div class="st-name">${esc(c.name)} <span class="demo-tag">${MODE_LABEL[c.mode] || c.mode}</span></div>
+        <div class="st-meta">渠道：${esc(c.channels.join("、"))}</div>
+      </div>
+      <div class="st-balance"><div class="amt">${cny(c.cny)}</div><div class="sub">期内成本</div></div>
+    </div>`).join("");
+  const unmatchedRows = p.unmatched.length ? `
+    <div class="section-head" style="margin-top:16px"><h2>未纳入成本的渠道</h2>
+      <span class="muted">共 ${p.unmatched.length} 个上游（按 URL 合并）· 加入监控并配好汇率即可参与利润计算</span></div>
+    <div class="panel">${p.unmatched.map((u) => `
+      <div class="st-row profit-row">
+        <div class="st-main" style="cursor:default">
+          <div class="st-name">${esc(u.label)}</div>
+          <div class="st-meta">${esc(u.names.join("、"))}</div>
+        </div>
+        <div class="st-balance"><div class="sub">${u.enabled}/${u.total} 个渠道启用</div></div>
+      </div>`).join("")}</div>` : "";
+  return `
+    <div class="section-head"><h2>利润分析</h2>
+      <span class="muted">收入按你的售价汇率 · 成本按各上游充值汇率（窗口 ${p.windowDays} 天）</span></div>
+    <div class="stats" style="grid-template-columns:repeat(4,1fr)">
+      <div class="stat-card"><div class="label">期内收入</div><div class="value">${cny(p.incomeCny)}</div></div>
+      <div class="stat-card"><div class="label">期内成本</div><div class="value">${cny(p.totalCostCny)}</div></div>
+      <div class="stat-card"><div class="label">利润</div><div class="value ${profitCls}">${cny(p.profitCny)}</div></div>
+      <div class="stat-card"><div class="label">利润率</div><div class="value ${profitCls}">${p.marginPct != null ? p.marginPct + "%" : "—"}</div></div>
+    </div>
+    ${p.costs.length ? `<div class="panel" style="margin-bottom:14px">${costRows}</div>`
+      : '<div class="usage-errors" style="margin-bottom:14px"><span>没有渠道能匹配到监控中的站点（按 URL 比对），成本暂计 ¥0</span></div>'}
+    ${unmatchedRows}
+    <div class="section-head" style="margin-top:16px"><h2>用量分析</h2></div>`;
 }
 
 // 分用户消费横向条形图（¥）
@@ -1162,6 +1205,7 @@ function openModal(station) {
   $("#f-password").value = "";
   $("#f-lowBalance").value = station?.lowBalanceUsd ?? "";
   $("#f-cnyRate").value = station?.cnyPerUsd ?? "";
+  $("#f-fixedCny").value = station?.fixedMonthlyCny ?? "";
   $("#f-own").checked = !!station?.isOwn;
   if (station) {
     $("#f-accessToken").placeholder = station.hasAccessToken ? "已配置，留空保持不变" : "令牌 / JWT";
@@ -1205,6 +1249,7 @@ $("#modalSave").onclick = async () => {
     email: $("#f-email").value.trim(),
     lowBalanceUsd: $("#f-lowBalance").value.trim(),
     cnyPerUsd: $("#f-cnyRate").value.trim(),
+    fixedMonthlyCny: $("#f-fixedCny").value.trim(),
     isOwn: $("#f-type").value === "newapi" && $("#f-own").checked,
   };
   const at = $("#f-accessToken").value.trim();

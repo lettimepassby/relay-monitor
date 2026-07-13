@@ -122,6 +122,8 @@ button { font-family: inherit; cursor: pointer; }
 .stat-card .value small { font-size: 12px; font-weight: 500; color: var(--text-tertiary); margin-left: 2px; }
 .stat-card .value.warn { color: var(--text-warning); }
 .stat-card .value.danger { color: var(--text-danger); }
+.stat-card .value.good { color: var(--text-success); }
+.profit-row { padding: 10px 16px; }
 .stat-card .stat-sub { font-size: 11px; color: var(--text-tertiary); margin-top: 3px; font-variant-numeric: tabular-nums; }
 
 .section-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }

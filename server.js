@@ -5,7 +5,7 @@ import { readFile } from "node:fs/promises";
 
 import { Store } from "./lib/store.js";
 import {
-  queryStation, queryStationUsage, queryOwnData,
+  queryStation, queryStationUsage, queryOwnData, queryOwnChannels,
   dateStrInTz, parseDateLabel, STATION_TYPES,
 } from "./lib/providers.js";
 import { forecastDaily } from "./lib/forecast.js";
@@ -181,6 +181,20 @@ mock.get("/newapi/:acc/api/data/", (req, res) => {
 mock.get("/newapi/:acc/api/data/users", (req, res) => {
   if (!needAuth(req, res)) return;
   res.json({ success: true, message: "", data: mockOwnRows(Number(req.query.start_timestamp) || 0, Number(req.query.end_timestamp) || 0, "user") });
+});
+mock.get("/newapi/:acc/api/channel/", (req, res) => {
+  if (!needAuth(req, res)) return;
+  const local = `http://${HOST}:${PORT}/mock`;
+  res.json({
+    success: true, message: "",
+    data: { items: [
+      { id: 1, name: "上游A-高速", type: 1, status: 1, base_url: `${local}/newapi/np-pro` },
+      { id: 2, name: "上游A-备用", type: 1, status: 2, base_url: `${local}/newapi/np-pro` },
+      { id: 3, name: "拼车团队", type: 14, status: 1, base_url: `${local}/sub2api/s2-team` },
+      { id: 4, name: "官方直连-DeepSeek", type: 43, status: 1, base_url: "" },
+      { id: 5, name: "包月自建", type: 14, status: 1, base_url: "http://10.0.0.8:13800" },
+    ], total: 5 },
+  });
 });
 
 // 用户仪表盘统计（与真实 Sub2API 的 /usage/dashboard/stats 契约一致）
@@ -528,6 +542,7 @@ app.get("/api/own/analytics", async (req, res) => {
       trend: [...tmap.values()].sort((a, b) => a.t - b.t),
       daily: daily.slice(-14),
       forecast: forecastDaily(daily, 7),
+      profit: await computeProfit(own, payloadIncome(winModel), { startMs, now, tz, range }),
       generatedAt: new Date().toISOString(),
     };
     ownCache.set(cacheKey, { at: Date.now(), payload });
@@ -536,6 +551,83 @@ app.get("/api/own/analytics", async (req, res) => {
     res.status(502).json({ error: err?.message || String(err) });
   }
 });
+
+function payloadIncome(winModelRows) {
+  return winModelRows.reduce((a, r) => a + r.cost, 0);
+}
+
+// 渠道列表拉取开销不小，缓存 10 分钟
+let ownChannelsCache = { at: 0, stationId: null, list: null };
+
+/**
+ * 利润 = 收入（下游消费 × 自有站售价汇率）− 成本（各匹配上游的期内成本）
+ * 成本口径：配置了每月固定成本的上游按天摊销（月费 ÷ 30 × 窗口天数）；
+ * 否则按上游用量接口的实际扣费 × 充值汇率；用量接口不可用时退回余额下降推算。
+ * 渠道按 base_url 与监控站点匹配（忽略协议/末尾斜杠/是否带 /api）。
+ */
+async function computeProfit(own, incomeUsd, { startMs, now, tz, range }) {
+  const r2 = (v) => Math.round(v * 100) / 100;
+  try {
+    if (!ownChannelsCache.list || ownChannelsCache.stationId !== own.id || Date.now() - ownChannelsCache.at > 600000) {
+      ownChannelsCache = { at: Date.now(), stationId: own.id, list: await queryOwnChannels(own) };
+    }
+    const channels = ownChannelsCache.list;
+    const norm = (u) => String(u || "").toLowerCase().replace(/^https?:\/\//, "").replace(/\/+$/, "");
+    const same = (a, b) => a && b && (a === b || a === b + "/api" || b === a + "/api");
+    const upstreams = store.list().filter((s) => s.id !== own.id);
+
+    const matched = new Map(); // stationId -> {station, channels[]}
+    const unmatched = new Map(); // label -> {label, names[], enabled, total}
+    for (const ch of channels) {
+      const cu = norm(ch.baseUrl);
+      const st = cu ? upstreams.find((s) => same(norm(s.baseUrl), cu)) : null;
+      if (st) {
+        const e = matched.get(st.id) || { station: st, channels: [] };
+        e.channels.push(ch.name);
+        matched.set(st.id, e);
+      } else {
+        const label = cu || `官方 / 内置渠道（type ${ch.type}）`;
+        const e = unmatched.get(label) || { label, names: [], enabled: 0, total: 0 };
+        e.names.push(ch.name);
+        e.total++;
+        if (ch.status === 1) e.enabled++;
+        unmatched.set(label, e);
+      }
+    }
+
+    const windowDays = (now - startMs) / 86400000;
+    const rateOf = (s) => (s.cnyPerUsd != null && s.cnyPerUsd > 0 ? s.cnyPerUsd : 1);
+    const costs = await Promise.all([...matched.values()].map(async ({ station, channels: chNames }) => {
+      const item = { stationId: station.id, name: station.name, channels: chNames };
+      if (station.fixedMonthlyCny != null && station.fixedMonthlyCny > 0) {
+        return { ...item, mode: "fixed", cny: r2((station.fixedMonthlyCny / 30) * windowDays) };
+      }
+      try {
+        const u = await queryStationUsage(station, {
+          startMs, endMs: now, granularity: "day", tz, wantToday: range === "today",
+        });
+        const usd = range === "today" && u.summary ? u.summary.cost : u.models.reduce((a, m) => a + m.cost, 0);
+        return { ...item, mode: "usage", cny: r2(usd * rateOf(station)) };
+      } catch {
+        return { ...item, mode: "history", cny: r2(history.usedSince(station.id, startMs) * rateOf(station)) };
+      }
+    }));
+
+    const ownRate = own.cnyPerUsd != null && own.cnyPerUsd > 0 ? own.cnyPerUsd : 1;
+    const incomeCny = r2(incomeUsd * ownRate);
+    const totalCostCny = r2(costs.reduce((a, c) => a + c.cny, 0));
+    return {
+      incomeCny, totalCostCny,
+      profitCny: r2(incomeCny - totalCostCny),
+      marginPct: incomeCny > 0 ? Math.round(((incomeCny - totalCostCny) / incomeCny) * 1000) / 10 : null,
+      costs: costs.sort((a, b) => b.cny - a.cny),
+      unmatched: [...unmatched.values()].sort((a, b) => b.enabled - a.enabled || b.total - a.total),
+      windowDays: Math.round(windowDays * 10) / 10,
+    };
+  } catch (err) {
+    return { error: err?.message || String(err) };
+  }
+}
 
 // ---- 通知渠道 ----------------------------------------------------------------
 app.get("/api/notifications", (req, res) => {
