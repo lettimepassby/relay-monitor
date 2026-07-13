@@ -444,7 +444,7 @@ app.get("/api/usage", async (req, res) => {
   const endMs = now;
 
   const stations = await Promise.all(store.list().map(async (s) => {
-    const meta = { id: s.id, name: s.name, type: s.type, cnyPerUsd: s.cnyPerUsd ?? null };
+    const meta = { id: s.id, name: s.name, type: s.type, cnyPerUsd: s.cnyPerUsd ?? null, isOwn: !!s.isOwn };
     try {
       const u = await queryStationUsage(s, {
         startMs, endMs, granularity, tz,

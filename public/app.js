@@ -224,7 +224,7 @@ function stationRow(s) {
   <div class="st-row" data-id="${s.id}">
     <div class="st-plate">${PLATE[s.type] || "?"}</div>
     <div class="st-main" data-act="trend" title="查看余额趋势">
-      <div class="st-name">${esc(s.name)}${s.demo ? '<span class="demo-tag">演示</span>' : ""} ${statusPill(st)}</div>
+      <div class="st-name">${esc(s.name)}${s.isOwn ? '<span class="demo-tag">我的站</span>' : ""}${s.demo ? '<span class="demo-tag">演示</span>' : ""} ${statusPill(st)}</div>
       <div class="st-meta">${meta}</div>
       ${bar}
       ${predict}
@@ -247,21 +247,23 @@ const HDR_BTNS = `
 
 function renderDashboard() {
   const list = state.stations;
-  const okList = list.filter((s) => s.balance?.ok);
-  const anyRate = list.some((s) => rateOf(s) !== 1);
+  // 聚合统计只算上游：标记「我的站点」的余额是自家 root 账号额度，混进来会污染数字
+  const ups = list.filter((s) => !s.isOwn);
+  const okList = ups.filter((s) => s.balance?.ok);
+  const anyRate = ups.some((s) => rateOf(s) !== 1);
   const totalRemaining = okList.reduce((a, s) => a + s.balance.remaining, 0);
   const totalRemainingCny = okList.reduce((a, s) => a + s.balance.remaining * rateOf(s), 0);
   const totalUsedCny = okList.reduce((a, s) => a + s.balance.used * rateOf(s), 0);
-  const totalBurnCny = list.reduce((a, s) => a + (s.prediction?.burnPerDay || 0) * rateOf(s), 0);
-  const todayTotalCny = list.reduce((a, s) => a + (s.todayUsed || 0) * rateOf(s), 0);
+  const totalBurnCny = ups.reduce((a, s) => a + (s.prediction?.burnPerDay || 0) * rateOf(s), 0);
+  const todayTotalCny = ups.reduce((a, s) => a + (s.todayUsed || 0) * rateOf(s), 0);
   // 任一站点的今日消耗是历史推算值时，合计也只能算约数
-  const todayApprox = list.some((s) => (s.todayUsed || 0) > 0 && s.todayIsEstimate);
-  const lowCount = list.filter((s) => ["warn", "danger"].includes(statusOf(s))).length;
-  const errCount = list.filter((s) => statusOf(s) === "error").length;
+  const todayApprox = ups.some((s) => (s.todayUsed || 0) > 0 && s.todayIsEstimate);
+  const lowCount = ups.filter((s) => ["warn", "danger"].includes(statusOf(s))).length;
+  const errCount = ups.filter((s) => statusOf(s) === "error").length;
 
   // 今日 tokens / 请求数：只有 sub2api 站点能提供，有数据才显示
-  const tokList = list.filter((s) => s.todayTokens != null);
-  const reqList = list.filter((s) => s.todayRequests != null);
+  const tokList = ups.filter((s) => s.todayTokens != null);
+  const reqList = ups.filter((s) => s.todayRequests != null);
   const subBits = [];
   if (tokList.length) subBits.push(`${fmtTokens(tokList.reduce((a, s) => a + s.todayTokens, 0))} tokens`);
   if (reqList.length) subBits.push(`${reqList.reduce((a, s) => a + s.todayRequests, 0).toLocaleString("en-US")} 次请求`);
@@ -283,7 +285,7 @@ function renderDashboard() {
   <div class="charts-grid">
     <div class="panel chart-card">
       <div class="chart-card-head">
-        <div><h3>总余额趋势</h3><div class="chart-sub">全部中转站剩余余额合计（按充值汇率折算 ¥）</div></div>
+        <div><h3>总余额趋势</h3><div class="chart-sub">上游站点剩余余额合计（按充值汇率折算 ¥，不含我的站点）</div></div>
         <div class="seg" id="ovRange">${RANGES.map(([h, l]) =>
           `<button data-hours="${h}" class="${state.trendHours === h ? "active" : ""}">${l}</button>`).join("")}</div>
       </div>
@@ -302,7 +304,7 @@ function renderDashboard() {
     : emptyState();
   $("#content").innerHTML = stats + charts + body;
   if (list.length) {
-    drawBurnBars($("#burnChart"), list);
+    drawBurnBars($("#burnChart"), ups);
     mountOverviewChart();
   }
 }
@@ -326,11 +328,12 @@ async function mountOverviewChart() {
   }
 }
 
-// 聚合全部站点：时间并集 + 各站前向填充求和（按各站充值汇率折算成 ¥）
+// 聚合上游站点：时间并集 + 各站前向填充求和（按各站充值汇率折算成 ¥，不含我的站点）
 function drawTotalChart(wrap, ov) {
   const rateMap = new Map(state.stations.map((s) => [s.id, rateOf(s)]));
+  const ownIds = new Set(state.stations.filter((s) => s.isOwn).map((s) => s.id));
   const seriesList = ov.series
-    .filter((s) => s.points && s.points.length)
+    .filter((s) => s.points && s.points.length && !ownIds.has(s.id))
     .map((s) => ({ ...s, rate: rateMap.get(s.id) ?? 1 }));
   const times = [];
   for (const s of seriesList) for (const p of s.points) times.push(p[0]);
@@ -592,8 +595,8 @@ function renderUsage() {
       <div class="seg" id="usageRange">${USAGE_RANGES.map(([v, l]) =>
         `<button data-range="${v}" class="${state.usageRange === v ? "active" : ""}">${l}</button>`).join("")}</div>
       <select class="select usage-station" id="usageStation">
-        <option value="all">全部中转站</option>
-        ${state.stations.map((s) => `<option value="${s.id}"${state.usageStation === s.id ? " selected" : ""}>${esc(s.name)}</option>`).join("")}
+        <option value="all">全部上游站点</option>
+        ${state.stations.map((s) => `<option value="${s.id}"${state.usageStation === s.id ? " selected" : ""}>${esc(s.name)}${s.isOwn ? "（我的站）" : ""}</option>`).join("")}
       </select>
     </div>
     <div id="usageBody"><div class="chart-empty">加载中…</div></div>`;
@@ -623,7 +626,10 @@ function renderUsageBody() {
   const el = $("#usageBody");
   if (!el || !state.usageData) return;
   const data = state.usageData;
-  const sts = state.usageStation === "all" ? data.stations : data.stations.filter((s) => s.id === state.usageStation);
+  // 「全部」只聚合上游；我的站点仍可在下拉里单独选看
+  const sts = state.usageStation === "all"
+    ? data.stations.filter((s) => !s.isOwn)
+    : data.stations.filter((s) => s.id === state.usageStation);
   const okSts = sts.filter((s) => s.ok);
   const errSts = sts.filter((s) => !s.ok);
 
