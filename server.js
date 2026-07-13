@@ -43,7 +43,7 @@ function mockState(acc) {
   const a = MOCK_ACCOUNTS[acc] || MOCK_ACCOUNTS["np-pro"];
   const minutes = (Date.now() - BOOT) / 60000;
   const used = Math.min(a.baseUsedUsd + minutes * a.drain, a.grantUsd);
-  return { name: a.name, grantUsd: a.grantUsd, usedUsd: used };
+  return { name: a.name, grantUsd: a.grantUsd, usedUsd: used, drain: a.drain };
 }
 const mock = express.Router();
 const needAuth = (req, res) => {
@@ -135,6 +135,24 @@ mock.get("/sub2api/:acc/api/v1/auth/me", (req, res) => {
       data: { username: s.name, balance, quota: s.grantUsd, quota_used: Number(s.usedUsd.toFixed(2)) },
     });
   }
+});
+// 用户仪表盘统计（与真实 Sub2API 的 /usage/dashboard/stats 契约一致）
+mock.get("/sub2api/:acc/api/v1/usage/dashboard/stats", (req, res) => {
+  if (!needAuth(req, res)) return;
+  const s = mockState(req.params.acc);
+  const midnight = new Date();
+  midnight.setHours(0, 0, 0, 0);
+  const minToday = (Date.now() - midnight.getTime()) / 60000;
+  const todayCost = Math.min(minToday * s.drain, s.usedUsd);
+  res.json({
+    code: 0, message: "success",
+    data: {
+      today_actual_cost: Number(todayCost.toFixed(4)),
+      today_cost: Number((todayCost * 1.15).toFixed(4)),
+      today_requests: Math.round(todayCost * 40),
+      total_actual_cost: Number(s.usedUsd.toFixed(4)),
+    },
+  });
 });
 app.use("/mock", mock);
 
@@ -384,6 +402,10 @@ app.put("/api/settings", async (req, res) => {
 // 隐藏敏感凭证，仅返回是否已配置
 function redact(s) {
   const { accessToken, apiKey, password, s2Tokens, ...rest } = s;
+  // 今日消耗：sub2api 直接用站点仪表盘接口的值；拿不到就按余额历史推算（前端标 ≈）
+  const midnight = new Date();
+  midnight.setHours(0, 0, 0, 0);
+  const fromSite = s.balance?.todayUsed;
   return {
     ...rest,
     hasAccessToken: !!accessToken,
@@ -393,6 +415,8 @@ function redact(s) {
       ? { expiresAt: s2Tokens.expiresAt || null, lastLoginAt: s2Tokens.lastLoginAt || null }
       : null,
     prediction: history.predict(s.id),
+    todayUsed: fromSite ?? history.usedSince(s.id, midnight.getTime()),
+    todayIsEstimate: fromSite == null,
   };
 }
 

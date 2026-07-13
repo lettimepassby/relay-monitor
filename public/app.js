@@ -108,13 +108,15 @@ function fmtClock(ts) {
   const p = (n) => String(n).padStart(2, "0");
   return `${d.getMonth() + 1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
+function fmtEtaText(days) {
+  return days >= 1 ? `${days} 天` : `${Math.max(1, Math.round(days * 24))} 小时`;
+}
 function etaText(p) {
   if (!p) return null;
   if (p.burnPerDay === 0) return { text: "近期无消耗", cls: "" };
   if (p.etaDays == null) return null;
   const cls = p.etaDays <= (state.rules.etaDays ?? 3) ? "danger" : p.etaDays <= 7 ? "warn" : "";
-  const t = p.etaDays >= 1 ? `${p.etaDays} 天` : `${Math.max(1, Math.round(p.etaDays * 24))} 小时`;
-  return { text: `≈ ${usd(p.burnPerDay)}/天 · 预计 ${t}后耗尽`, cls };
+  return { text: `≈ ${usd(p.burnPerDay)}/天 · 预计 ${fmtEtaText(p.etaDays)}后耗尽`, cls };
 }
 
 // ---- 登录 -------------------------------------------------------------------
@@ -175,7 +177,13 @@ function stationRow(s) {
     ? `<div class="st-bar"><div class="progress"><i class="${cls}" style="width:${usedPct}%"></i></div><span class="st-usage">已用 ${usd(b.used)} / ${usd(b.total)}</span></div>`
     : "";
   const eta = etaText(s.prediction);
-  const predict = eta ? `<div class="st-predict"><span class="${eta.cls}">${eta.text}</span><span>· 点击查看趋势</span></div>` : "";
+  const pieces = [];
+  if (b && b.ok && s.todayUsed != null) {
+    pieces.push(`<span>今日消耗 ${s.todayIsEstimate ? "≈" : ""}${usd(s.todayUsed)}</span>`);
+  }
+  if (eta) pieces.push(`<span class="${eta.cls}">${eta.text}</span>`);
+  if (pieces.length) pieces.push("<span>点击查看趋势</span>");
+  const predict = pieces.length ? `<div class="st-predict">${pieces.join("<span>·</span>")}</div>` : "";
   return `
   <div class="st-row" data-id="${s.id}">
     <div class="st-plate">${PLATE[s.type] || "?"}</div>
@@ -207,14 +215,18 @@ function renderDashboard() {
   const totalRemaining = okList.reduce((a, s) => a + s.balance.remaining, 0);
   const totalUsed = okList.reduce((a, s) => a + s.balance.used, 0);
   const totalBurn = list.reduce((a, s) => a + (s.prediction?.burnPerDay || 0), 0);
+  const todayTotal = list.reduce((a, s) => a + (s.todayUsed || 0), 0);
+  // 任一站点的今日消耗是历史推算值时，合计也只能算约数
+  const todayApprox = list.some((s) => (s.todayUsed || 0) > 0 && s.todayIsEstimate);
   const lowCount = list.filter((s) => ["warn", "danger"].includes(statusOf(s))).length;
   const errCount = list.filter((s) => statusOf(s) === "error").length;
 
   $("#headerActions").innerHTML = HDR_BTNS;
   const stats = `
-  <div class="stats">
+  <div class="stats stats-5">
     <div class="stat-card"><div class="label">总剩余余额</div><div class="value">${usd(totalRemaining)}</div></div>
-    <div class="stat-card"><div class="label">日均总消耗</div><div class="value">${totalBurn > 0 ? usd(totalBurn) : "—"}</div></div>
+    <div class="stat-card"><div class="label">今日总消耗</div><div class="value">${todayApprox ? "≈ " : ""}${usd(todayTotal)}</div></div>
+    <div class="stat-card"><div class="label">日均消耗（估算）</div><div class="value">${totalBurn > 0 ? usd(totalBurn) : "—"}</div></div>
     <div class="stat-card"><div class="label">低余额 / 耗尽</div><div class="value ${lowCount ? "warn" : ""}">${lowCount}<small>个</small></div></div>
     <div class="stat-card"><div class="label">查询异常</div><div class="value ${errCount ? "danger" : ""}">${errCount}<small>个</small></div></div>
   </div>`;
@@ -484,8 +496,14 @@ function renderNotify() {
       ${tg("onRecover", "恢复正常", "从异常状态恢复后通知")}
       ${tg("onEta", "耗尽预警", "按消耗速度预计即将耗尽时通知")}
       <div class="set-row">
-        <div><div class="set-title">耗尽预警阈值</div><div class="set-desc">预计 N 天内耗尽则触发「耗尽预警」</div></div>
-        <div class="field-inline"><input class="input small" id="rule-etaDays" value="${r.etaDays ?? 3}"><span class="set-desc">天</span></div>
+        <div><div class="set-title">耗尽预警阈值</div><div class="set-desc">预计在该时间内耗尽则触发「耗尽预警」，可按天或小时设置</div></div>
+        <div class="field-inline">
+          <input class="input small" id="rule-etaVal" value="${etaRuleDisplay(r)}">
+          <select class="select small" id="rule-etaUnit">
+            <option value="days"${r.etaUnit === "hours" ? "" : " selected"}>天</option>
+            <option value="hours"${r.etaUnit === "hours" ? " selected" : ""}>小时</option>
+          </select>
+        </div>
       </div>
       <div class="set-row">
         <div><div class="set-title">重复提醒间隔</div><div class="set-desc">同一异常持续存在时，每隔 N 小时再次提醒（0 = 只提醒一次）</div></div>
@@ -496,6 +514,20 @@ function renderNotify() {
         <button class="btn btn-primary" id="rulesSave">保存</button>
       </div>
     </div>`;
+
+  // 切换单位时把输入值换算过去（两个单位间必然是互换）
+  $("#rule-etaUnit").onchange = () => {
+    const inp = $("#rule-etaVal");
+    const v = Number(inp.value);
+    if (!Number.isFinite(v) || v <= 0) return;
+    inp.value = $("#rule-etaUnit").value === "hours" ? +(v * 24).toFixed(2) : +(v / 24).toFixed(2);
+  };
+}
+
+// 阈值内部按天存储；界面按所选单位展示
+function etaRuleDisplay(r) {
+  const days = Number(r.etaDays ?? 3);
+  return r.etaUnit === "hours" ? +(days * 24).toFixed(2) : +days.toFixed(2);
 }
 
 // ---- 设置页 -----------------------------------------------------------------
@@ -736,8 +768,9 @@ async function openTrend(station) {
     const eta = etaText(prediction);
     $("#trendStats").innerHTML = `
       <div class="stat-card"><div class="label">当前余额</div><div class="value">${b?.ok ? usd(b.remaining) : "—"}</div></div>
-      <div class="stat-card"><div class="label">日均消耗</div><div class="value">${prediction?.burnPerDay > 0 ? usd(prediction.burnPerDay) : "—"}</div></div>
-      <div class="stat-card"><div class="label">预计耗尽</div><div class="value ${eta?.cls || ""}">${prediction?.etaDays != null ? prediction.etaDays + " 天" : "—"}</div></div>`;
+      <div class="stat-card"><div class="label">今日消耗</div><div class="value">${station.todayUsed != null ? (station.todayIsEstimate ? "≈ " : "") + usd(station.todayUsed) : "—"}</div></div>
+      <div class="stat-card"><div class="label">日均消耗（估算）</div><div class="value">${prediction?.burnPerDay > 0 ? usd(prediction.burnPerDay) : "—"}</div></div>
+      <div class="stat-card"><div class="label">预计耗尽</div><div class="value ${eta?.cls || ""}">${prediction?.etaDays != null ? fmtEtaText(prediction.etaDays) : "—"}</div></div>`;
     drawChart($("#trendChart"), points, prediction);
   } catch (e) {
     if (seq !== trendSeq) return;
@@ -884,13 +917,16 @@ $(".main").addEventListener("click", async (e) => {
   }
   if (e.target.closest("#rulesSave")) {
     try {
+      const unit = $("#rule-etaUnit").value;
+      const val = Number($("#rule-etaVal").value);
       const r = await api.saveRules({
-        etaDays: Number($("#rule-etaDays").value),
+        etaDays: unit === "hours" ? val / 24 : val, // 内部统一按天
+        etaUnit: unit,
         renotifyHours: Number($("#rule-renotify").value),
       });
       state.rules = r.rules;
-      // 回显服务端钳制后的值（比如 0 天会被修正为 3），不然界面显示的是没生效的输入
-      $("#rule-etaDays").value = state.rules.etaDays;
+      // 回显服务端钳制后的值（如非法输入被忽略、下限 1 小时），不然界面显示的是没生效的输入
+      $("#rule-etaVal").value = etaRuleDisplay(state.rules);
       $("#rule-renotify").value = state.rules.renotifyHours;
       toast("规则已保存");
     } catch (err) { toast(err.message, "err"); }
