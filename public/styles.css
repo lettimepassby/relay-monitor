@@ -310,6 +310,12 @@ button { font-family: inherit; cursor: pointer; }
   .report-frame { height: 52vh; }
 }
 
+/* PWA 独立窗口模式：避开刘海与底部指示条 */
+@media (display-mode: standalone) {
+  .titlebar { padding-top: calc(env(safe-area-inset-top, 0px)); height: calc(42px + env(safe-area-inset-top, 0px)); }
+  .content { padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px)); }
+}
+
 /* ---- 登录屏 ---- */
 .login-screen {
   position: fixed; inset: 0; background: var(--window-outer-bg); z-index: 100;

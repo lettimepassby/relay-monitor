@@ -1970,6 +1970,13 @@ document.addEventListener("visibilitychange", () => {
 // 我的站点页滚动时同步目录高亮
 $("#content").addEventListener("scroll", updateOwnTocActive, { passive: true });
 
+// PWA：注册 Service Worker（需要 HTTPS 或 localhost 环境）
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+  });
+}
+
 async function bootData() {
   const meta = await api.meta();
   state.types = meta.types;
