@@ -609,14 +609,28 @@ async function computeProfit(own, incomeUsd, adminUsageUsd, { startMs, now, tz, 
     }
     const channels = ownChannelsCache.list;
     const norm = (u) => String(u || "").toLowerCase().replace(/^https?:\/\//, "").replace(/\/+$/, "");
-    const same = (a, b) => a && b && (a === b || a === b + "/api" || b === a + "/api");
+    const hostOf = (u) => u.split("/")[0].split(":")[0];
+    const isBareHost = (u) => !!u && !u.includes("/") && !u.includes(":");
+    // 匹配打分：精确 > ±/api 后缀 > 裸主机（站点地址不带端口/路径时，
+    // 覆盖该主机所有端口——同一台机器跑多个服务的场景）
+    const matchScore = (stUrl, chUrl) => {
+      if (!stUrl || !chUrl) return 0;
+      if (stUrl === chUrl) return 3;
+      if (stUrl === chUrl + "/api" || chUrl === stUrl + "/api") return 2;
+      if (isBareHost(stUrl) && hostOf(chUrl) === stUrl) return 1;
+      return 0;
+    };
     const upstreams = store.list().filter((s) => s.id !== own.id);
 
     const matched = new Map(); // stationId -> {station, channels[]}
     const unmatched = new Map(); // label -> {label, names[], enabled, total}
     for (const ch of channels) {
       const cu = norm(ch.baseUrl);
-      const st = cu ? upstreams.find((s) => same(norm(s.baseUrl), cu)) : null;
+      let st = null, best = 0;
+      for (const s of upstreams) {
+        const score = matchScore(norm(s.baseUrl), cu);
+        if (score > best) { best = score; st = s; }
+      }
       if (st) {
         const e = matched.get(st.id) || { station: st, channels: [] };
         e.channels.push(ch.name);
