@@ -53,7 +53,7 @@ const api = {
   refreshAll: () => call("/api/refresh", { method: "POST", body: {} }),
   historyOf: (id, hours) => call(`/api/stations/${id}/history?hours=${hours}`),
   overview: (hours) => call(`/api/history/overview?hours=${hours}`),
-  usage: (range) => call(`/api/usage?range=${range}`),
+  usage: (range) => call(`/api/usage?range=${range}&tz=${encodeURIComponent(Intl.DateTimeFormat().resolvedOptions().timeZone)}`),
   saveSettings: (b) => call("/api/settings", { method: "PUT", body: b }),
   notifications: () => call("/api/notifications"),
   addChannel: (b) => call("/api/notifications/channels", { body: b }),
@@ -549,7 +549,9 @@ function etaRuleDisplay(r) {
 }
 
 // ---- 用量统计页 ----------------------------------------------------------------
-const USAGE_RANGES = [["today", "今天"], ["7d", "近 7 天"], ["30d", "近 30 天"]];
+const USAGE_RANGES = [["today", "今天"], ["24h", "近 24 小时"], ["7d", "近 7 天"], ["30d", "近 30 天"]];
+// 消耗金额显示到 4 位小数，与 sub2api 站点精度一致
+const usd4 = (n) => "$" + Number(n ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 });
 
 function renderUsage() {
   $("#headerActions").innerHTML = `
@@ -604,34 +606,53 @@ function renderUsageBody() {
   }
   const models = [...mmap.values()].sort((a, b) => b.tokens - a.tokens);
 
-  // 按时间桶合并（不同提供商的桶统一成展示标签）
+  // 按时间桶合并：能解析出时间戳的按小时/天取整分桶（跨天时小时标签会重复，
+  // 不能拿标签当键），解析不出的按原始标签
+  const hourly = data.granularity === "hour";
+  const bucketKey = (p) => {
+    if (p.t == null) return "l:" + (p.label || "?");
+    if (hourly) return "t:" + Math.floor(p.t / 3600000);
+    const d = new Date(p.t);
+    return "d:" + d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate();
+  };
+  const today = new Date();
   const bucketLabel = (p) => {
-    if (p.t != null) {
-      const d = new Date(p.t);
-      return data.granularity === "hour"
-        ? `${String(d.getHours()).padStart(2, "0")}:00`
-        : `${d.getMonth() + 1}/${d.getDate()}`;
-    }
-    return p.label || "?";
+    if (p.t == null) return p.label || "?";
+    const d = new Date(p.t);
+    if (!hourly) return `${d.getMonth() + 1}/${d.getDate()}`;
+    const hh = `${String(d.getHours()).padStart(2, "0")}:00`;
+    return d.getDate() === today.getDate() && d.getMonth() === today.getMonth()
+      ? hh : `${d.getMonth() + 1}/${d.getDate()} ${hh}`;
   };
   const bmap = new Map();
   for (const s of okSts) for (const p of s.trend || []) {
-    const k = bucketLabel(p);
-    const acc = bmap.get(k) || { label: k, t: p.t ?? Infinity, tokens: 0, cost: 0, requests: 0 };
+    const k = bucketKey(p);
+    const acc = bmap.get(k) || { label: bucketLabel(p), t: p.t ?? Infinity, tokens: 0, cost: 0, requests: 0 };
     acc.tokens += p.tokens || 0; acc.cost += p.cost || 0; acc.requests += p.requests || 0;
     acc.t = Math.min(acc.t, p.t ?? Infinity);
     bmap.set(k, acc);
   }
   const buckets = [...bmap.values()].sort((a, b) => a.t - b.t);
 
-  const totTokens = models.reduce((a, m) => a + m.tokens, 0);
-  const totCost = models.reduce((a, m) => a + m.cost, 0);
-  const totReqs = models.reduce((a, m) => a + m.requests, 0);
+  // 合计口径按范围选：今天 = 站点仪表盘同款数字（和站点页面显示一致）；
+  // 近 24 小时 = 截好窗的趋势求和；7/30 天 = 模型明细求和
+  let totTokens, totCost, totReqs;
+  if (data.range === "today") {
+    totTokens = okSts.reduce((a, s) => a + (s.summary?.tokens ?? (s.models || []).reduce((x, m) => x + m.tokens, 0)), 0);
+    totCost = okSts.reduce((a, s) => a + (s.summary?.cost ?? (s.models || []).reduce((x, m) => x + m.cost, 0)), 0);
+    totReqs = okSts.reduce((a, s) => a + (s.summary?.requests ?? (s.models || []).reduce((x, m) => x + m.requests, 0)), 0);
+  } else {
+    const src = data.range === "24h" ? buckets : models;
+    totTokens = src.reduce((a, m) => a + m.tokens, 0);
+    totCost = src.reduce((a, m) => a + m.cost, 0);
+    totReqs = src.reduce((a, m) => a + m.requests, 0);
+  }
+  const modelsByDate = data.range === "24h" && okSts.some((s) => s.modelsWindow === "date");
 
   el.innerHTML = `
     <div class="stats">
-      <div class="stat-card"><div class="label">总 Tokens</div><div class="value">${fmtTokens(totTokens)}</div></div>
-      <div class="stat-card"><div class="label">实际消耗</div><div class="value">${usd(totCost)}</div></div>
+      <div class="stat-card"><div class="label">总 Tokens</div><div class="value" title="${totTokens.toLocaleString("en-US")}">${fmtTokens(totTokens)}</div></div>
+      <div class="stat-card"><div class="label">实际消耗</div><div class="value">${usd4(totCost)}</div></div>
       <div class="stat-card"><div class="label">请求数</div><div class="value">${totReqs.toLocaleString("en-US")}</div></div>
       <div class="stat-card"><div class="label">数据来源</div><div class="value">${okSts.length}<small>/ ${sts.length} 个站点</small></div></div>
     </div>
@@ -643,7 +664,9 @@ function renderUsageBody() {
         <div class="chart-wrap" id="usageTrendChart"></div>
       </div>
       <div class="panel chart-card">
-        <div class="chart-card-head"><div><h3>分模型 Token</h3><div class="chart-sub">按用量降序，最多显示 10 项</div></div></div>
+        <div class="chart-card-head"><div><h3>分模型 Token</h3><div class="chart-sub">${
+          modelsByDate ? "Sub2API 模型明细按自然日（昨日+今日）统计" : "按用量降序，最多显示 10 项"
+        }</div></div></div>
         <div class="chart-wrap" id="usageModelChart"></div>
       </div>
     </div>
@@ -655,10 +678,10 @@ function renderUsageBody() {
           ${models.map((m) => `<tr>
             <td class="mono">${esc(m.model)}</td>
             <td>${m.requests.toLocaleString("en-US")}</td>
-            <td>${m.hasIO ? fmtTokens(m.inputTokens) : "—"}</td>
-            <td>${m.hasIO ? fmtTokens(m.outputTokens) : "—"}</td>
-            <td>${fmtTokens(m.tokens)}</td>
-            <td>${usd(m.cost)}</td>
+            <td>${m.hasIO ? m.inputTokens.toLocaleString("en-US") : "—"}</td>
+            <td>${m.hasIO ? m.outputTokens.toLocaleString("en-US") : "—"}</td>
+            <td>${m.tokens.toLocaleString("en-US")}</td>
+            <td>${usd4(m.cost)}</td>
           </tr>`).join("") || '<tr><td colspan="6" class="u-empty">该范围内暂无用量数据</td></tr>'}
         </tbody>
       </table>
@@ -707,8 +730,8 @@ function drawUsageTrend(wrap, buckets) {
   wrap.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Token 消耗趋势">${grid}${labels}${cols}</svg><div class="chart-tip"></div>`;
   attachUsageTip(wrap, (i) => {
     const b = buckets[i];
-    return `<div class="t">${esc(b.label)}</div><div class="v">${fmtTokens(b.tokens)} tokens</div>` +
-      `<div class="r"><span>消耗</span><b>${usd(b.cost)}</b></div><div class="r"><span>请求</span><b>${b.requests.toLocaleString("en-US")}</b></div>`;
+    return `<div class="t">${esc(b.label)}</div><div class="v">${b.tokens.toLocaleString("en-US")} tokens</div>` +
+      `<div class="r"><span>消耗</span><b>${usd4(b.cost)}</b></div><div class="r"><span>请求</span><b>${b.requests.toLocaleString("en-US")}</b></div>`;
   });
 }
 
@@ -748,8 +771,8 @@ function drawUsageModels(wrap, models) {
   wrap.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="分模型 Token 用量">${rows}</svg><div class="chart-tip"></div>`;
   attachUsageTip(wrap, (i) => {
     const m = items[i];
-    return `<div class="t">${esc(m.model)}</div><div class="v">${fmtTokens(m.tokens)} tokens</div>` +
-      `<div class="r"><span>消耗</span><b>${usd(m.cost)}</b></div><div class="r"><span>请求</span><b>${m.requests.toLocaleString("en-US")}</b></div>`;
+    return `<div class="t">${esc(m.model)}</div><div class="v">${m.tokens.toLocaleString("en-US")} tokens</div>` +
+      `<div class="r"><span>消耗</span><b>${usd4(m.cost)}</b></div><div class="r"><span>请求</span><b>${m.requests.toLocaleString("en-US")}</b></div>`;
   });
 }
 
