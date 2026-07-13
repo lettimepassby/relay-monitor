@@ -190,17 +190,28 @@ function stationRow(s) {
   // 固定成本渠道：不访问接口，只展示摊销信息
   if (s.type === "fixed") {
     const daily = s.fixedCostCny > 0 && s.fixedDays > 0 ? s.fixedCostCny / s.fixedDays : 0;
+    const pieces = [`<span>日均摊销 ${cny(daily)}</span>`, `<span>每次 ${cny(s.fixedCostCny || 0)} 管 ${s.fixedDays || 0} 天</span>`];
+    let expired = false;
+    if (s.fixedStartDate && s.fixedDays > 0) {
+      const start = new Date(s.fixedStartDate + "T00:00:00");
+      const end = start.getTime() + s.fixedDays * 86400000;
+      const remain = Math.ceil((end - Date.now()) / 86400000);
+      expired = remain <= 0;
+      pieces.push(expired
+        ? `<span class="danger">已于 ${fmtClock(end).split(" ")[0]} 到期，续费请更新日期</span>`
+        : `<span${remain <= 3 ? ' class="warn"' : ""}>${esc(s.fixedStartDate)} 起 · 剩 ${remain} 天</span>`);
+    }
     return `
   <div class="st-row" data-id="${s.id}">
     <div class="st-plate">¥</div>
     <div class="st-main" style="cursor:default">
       <div class="st-name">${esc(s.name)}<span class="demo-tag">固定成本</span></div>
       <div class="st-meta">${s.baseUrl ? esc(s.baseUrl) + " · " : ""}不访问接口 · 仅计入利润成本</div>
-      <div class="st-predict"><span>日均摊销 ${cny(daily)}</span><span>·</span><span>每次 ${cny(s.fixedCostCny || 0)} 管 ${s.fixedDays || 0} 天</span></div>
+      <div class="st-predict">${pieces.join("<span>·</span>")}</div>
     </div>
     <div class="st-balance">
-      <div class="amt">${cny(daily)}</div>
-      <div class="sub">每天</div>
+      <div class="amt${expired ? " danger" : ""}">${cny(expired ? 0 : daily)}</div>
+      <div class="sub">${expired ? "已到期" : "每天"}</div>
     </div>
     <div class="st-actions">
       <button class="icon-btn" data-act="edit" title="编辑"><svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></button>
@@ -989,7 +1000,9 @@ function profitSection(p) {
   const costRows = p.costs.map((c) => `
     <div class="st-row profit-row">
       <div class="st-main" style="cursor:default">
-        <div class="st-name">${esc(c.name)} <span class="demo-tag">${MODE_LABEL[c.mode] || c.mode}</span></div>
+        <div class="st-name">${esc(c.name)} <span class="demo-tag">${MODE_LABEL[c.mode] || c.mode}</span>${
+          c.note ? ` <span class="demo-tag${c.note === "已到期" ? " tag-warn" : ""}">${esc(c.note)}</span>` : ""
+        }</div>
         <div class="st-meta">渠道：${esc(c.channels.join("、"))}</div>
       </div>
       <div class="st-balance"><div class="amt">${cny(c.cny)}</div><div class="sub">期内成本</div></div>
@@ -1230,6 +1243,8 @@ function openModal(station) {
   $("#f-cnyRate").value = station?.cnyPerUsd ?? "";
   $("#f-fixedCost").value = station?.fixedCostCny ?? "";
   $("#f-fixedDays").value = station?.fixedDays ?? "";
+  // 新建默认今天；编辑回显已存日期（本地时区的 YYYY-MM-DD）
+  $("#f-fixedStart").value = station ? (station.fixedStartDate || "") : new Date().toLocaleDateString("en-CA");
   $("#f-own").checked = !!station?.isOwn;
   if (station) {
     $("#f-accessToken").placeholder = station.hasAccessToken ? "已配置，留空保持不变" : "令牌 / JWT";
@@ -1281,6 +1296,7 @@ $("#modalSave").onclick = async () => {
     cnyPerUsd: $("#f-cnyRate").value.trim(),
     fixedCostCny: $("#f-fixedCost").value.trim(),
     fixedDays: $("#f-fixedDays").value.trim(),
+    fixedStartDate: $("#f-fixedStart").value,
     isOwn: $("#f-type").value === "newapi" && $("#f-own").checked,
   };
   const at = $("#f-accessToken").value.trim();

@@ -599,15 +599,27 @@ async function computeProfit(own, incomeUsd, { startMs, now, tz, range }) {
     const windowDays = (now - startMs) / 86400000;
     const rateOf = (s) => (s.cnyPerUsd != null && s.cnyPerUsd > 0 ? s.cnyPerUsd : 1);
 
-    // 固定成本：无论是否匹配到渠道都计入（服务器租金这类可以完全不填地址）
+    // 固定成本：无论是否匹配到渠道都计入（服务器租金这类可以完全不填地址）。
+    // 配置了购买日期的，只对 [购买日, 购买日+天数] 与展示窗口的重叠部分摊销，到期归零
     const costs = [];
     for (const s of upstreams) {
       const df = dailyFixedCny(s);
       if (df == null) continue;
+      let activeDays = windowDays;
+      let note = null;
+      if (s.fixedStartDate) {
+        const st = parseDateLabel(s.fixedStartDate, tz);
+        if (st != null) {
+          const end = st + s.fixedDays * 86400000;
+          activeDays = Math.max(0, Math.min(now, end) - Math.max(startMs, st)) / 86400000;
+          if (end <= now) note = "已到期";
+          else if (st > startMs) note = `${s.fixedStartDate} 起`;
+        }
+      }
       costs.push({
-        stationId: s.id, name: s.name, mode: "fixed",
+        stationId: s.id, name: s.name, mode: "fixed", note,
         channels: matched.get(s.id)?.channels || ["未匹配渠道 · 通用成本"],
-        cny: r2(df * windowDays),
+        cny: r2(df * activeDays),
       });
     }
     // 按用量：匹配到渠道且未配置固定成本的上游
