@@ -87,7 +87,23 @@ button { font-family: inherit; cursor: pointer; }
 .nav-item.active { background: var(--bg-selected); color: var(--primary); font-weight: 500; }
 .sidebar-foot { margin-top: auto; padding: 10px 10px 4px; font-size: 11px; color: var(--text-tertiary); line-height: 1.5; }
 
-.main { flex: 1; display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+.main { flex: 1; display: flex; flex-direction: column; min-width: 0; overflow: hidden; position: relative; }
+
+/* 我的站点页右侧悬浮目录 */
+.own-toc {
+  position: absolute; right: 12px; top: 116px; z-index: 12;
+  display: flex; flex-direction: column; gap: 2px; padding: 6px;
+  background: color-mix(in srgb, var(--bg-surface) 86%, transparent);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow-card);
+}
+.own-toc a {
+  font-size: 11.5px; color: var(--text-tertiary); padding: 4px 10px;
+  border-radius: 6px; cursor: pointer; white-space: nowrap;
+}
+.own-toc a:hover { background: var(--bg-hover); color: var(--text-primary); }
+.own-toc a.active { background: var(--bg-selected); color: var(--primary); font-weight: 500; }
+@media (max-width: 1080px) { .own-toc { display: none; } }
 .page-header {
   padding: 18px var(--content-padding) 0; display: flex; align-items: flex-start;
   justify-content: space-between; gap: 12px; flex-shrink: 0;

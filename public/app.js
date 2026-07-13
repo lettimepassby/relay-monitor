@@ -945,7 +945,7 @@ function renderOwnBody() {
         <div class="chart-wrap" id="ownModelChart"></div>
       </div>
     </div>
-    <div class="charts-grid">
+    <div class="charts-grid" data-toc="消费预测">
       <div class="panel chart-card">
         <div class="chart-card-head"><div><h3>消费预测</h3><div class="chart-sub">${esc(fcSub)}</div></div></div>
         <div class="chart-wrap" id="ownForecastChart"></div>
@@ -955,7 +955,7 @@ function renderOwnBody() {
         <div class="chart-wrap" id="ownUserChart"></div>
       </div>
     </div>
-    <div class="section-head"><h2>用户明细</h2><span class="muted">共 ${users.length} 个用户</span></div>
+    <div class="section-head" data-toc="用户明细"><h2>用户明细</h2><span class="muted">共 ${users.length} 个用户</span></div>
     <div class="panel u-table-wrap">
       <table class="u-table">
         <thead><tr><th>用户</th><th>请求数</th><th>Tokens</th><th>消费</th><th>占比</th></tr></thead>
@@ -969,7 +969,7 @@ function renderOwnBody() {
       </table>
     </div>
     ${userBalanceSection(d.userBalances, rate)}
-    <div class="section-head" style="margin-top:16px"><h2>模型明细</h2><span class="muted">共 ${models.length} 个模型</span></div>
+    <div class="section-head" style="margin-top:16px" data-toc="模型明细"><h2>模型明细</h2><span class="muted">共 ${models.length} 个模型</span></div>
     <div class="panel u-table-wrap">
       <table class="u-table">
         <thead><tr><th>模型</th><th>请求数</th><th>Tokens</th><th>消费</th><th>占比</th></tr></thead>
@@ -988,6 +988,41 @@ function renderOwnBody() {
   drawOwnUsers($("#ownUserChart"), users);
   drawForecast($("#ownForecastChart"), d.daily.map((x) => ({ t: x.t, cost: x.cost * rate })),
     fc ? fc.points.map((p) => ({ ...p, cost: p.cost * rate, lo: p.lo * rate, hi: p.hi * rate })) : null);
+  buildOwnToc();
+}
+
+// 右侧悬浮目录：扫描 [data-toc] 区块生成跳转项，滚动时高亮当前位置
+function buildOwnToc() {
+  document.querySelector(".own-toc")?.remove();
+  const marks = [...document.querySelectorAll("#ownBody [data-toc]")];
+  if (marks.length < 2) return;
+  marks.forEach((el, i) => { if (!el.id) el.id = "own-sec-" + i; });
+  const nav = document.createElement("nav");
+  nav.className = "own-toc";
+  nav.innerHTML = marks.map((el) => `<a data-target="${el.id}">${esc(el.dataset.toc)}</a>`).join("");
+  nav.addEventListener("click", (e) => {
+    const a = e.target.closest("a[data-target]");
+    if (!a) return;
+    const el = document.getElementById(a.dataset.target);
+    const sc = $("#content");
+    if (!el || !sc) return;
+    // 直接对滚动容器 scrollTo，比容器内 scrollIntoView 的平滑模式可靠
+    const top = el.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop - 8;
+    sc.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+  });
+  document.querySelector(".main").appendChild(nav);
+  updateOwnTocActive();
+}
+
+function updateOwnTocActive() {
+  const nav = document.querySelector(".own-toc");
+  if (!nav) return;
+  const sc = $("#content");
+  const cTop = sc.getBoundingClientRect().top;
+  const marks = [...document.querySelectorAll("#ownBody [data-toc]")];
+  let act = marks[0];
+  for (const m of marks) if (m.getBoundingClientRect().top - cTop <= 130) act = m;
+  nav.querySelectorAll("a").forEach((a) => a.classList.toggle("active", a.dataset.target === act?.id));
 }
 
 // 用户余额（不含管理员/root）：非零余额排序展示，零余额只报数量
@@ -997,7 +1032,7 @@ function userBalanceSection(list, rate) {
   const zeroCount = list.length - nonZero.length;
   const totalCny = list.reduce((a, u) => a + u.balanceUsd, 0) * rate;
   return `
-    <div class="section-head" style="margin-top:16px"><h2>用户余额</h2>
+    <div class="section-head" style="margin-top:16px" data-toc="用户余额"><h2>用户余额</h2>
       <span class="muted">不含管理员 · 共 ${list.length} 个用户 · 余额合计 ${cny(totalCny)}</span></div>
     <div class="panel u-table-wrap">
       <table class="u-table">
@@ -1034,7 +1069,7 @@ function profitSection(p) {
       <div class="st-balance"><div class="amt">${cny(c.cny)}</div><div class="sub">期内成本</div></div>
     </div>`).join("");
   const unmatchedRows = p.unmatched.length ? `
-    <div class="section-head" style="margin-top:16px"><h2>未纳入成本的渠道</h2>
+    <div class="section-head" style="margin-top:16px" data-toc="未纳入渠道"><h2>未纳入成本的渠道</h2>
       <span class="muted">共 ${p.unmatched.length} 个上游（按 URL 合并）· 加入监控并配好汇率即可参与利润计算</span></div>
     <div class="panel">${p.unmatched.map((u) => `
       <div class="st-row profit-row">
@@ -1045,7 +1080,7 @@ function profitSection(p) {
         <div class="st-balance"><div class="sub">${u.enabled}/${u.total} 个渠道启用</div></div>
       </div>`).join("")}</div>` : "";
   return `
-    <div class="section-head"><h2>利润分析</h2>
+    <div class="section-head" data-toc="利润分析"><h2>利润分析</h2>
       <span class="muted">收入 = 普通用户消费 × 售价汇率（不含管理员/root）· 成本按各上游口径（窗口 ${p.windowDays} 天）</span></div>
     <div class="stats" style="grid-template-columns:repeat(4,1fr)">
       <div class="stat-card"><div class="label">期内收入</div><div class="value">${cny(p.incomeCny)}</div>${
@@ -1058,7 +1093,7 @@ function profitSection(p) {
     ${p.costs.length ? `<div class="panel" style="margin-bottom:14px">${costRows}</div>`
       : '<div class="usage-errors" style="margin-bottom:14px"><span>没有渠道能匹配到监控中的站点（按 URL 比对），成本暂计 ¥0</span></div>'}
     ${unmatchedRows}
-    <div class="section-head" style="margin-top:16px"><h2>用量分析</h2></div>`;
+    <div class="section-head" style="margin-top:16px" data-toc="用量图表"><h2>用量分析</h2></div>`;
 }
 
 // 分用户消费横向条形图（¥）
@@ -1241,6 +1276,7 @@ function render() {
   };
   $("#pageTitle").textContent = titles[state.view][0];
   $("#pageSub").textContent = titles[state.view][1];
+  if (state.view !== "own") document.querySelector(".own-toc")?.remove();
   document.querySelectorAll(".nav-item").forEach((n) => n.classList.toggle("active", n.dataset.view === state.view));
   if (state.view === "dashboard") renderDashboard();
   else if (state.view === "stations") renderStations();
@@ -1756,6 +1792,9 @@ function startAuto() {
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden && state.user && $("#loginScreen").hidden) refreshCurrentView();
 });
+
+// 我的站点页滚动时同步目录高亮
+$("#content").addEventListener("scroll", updateOwnTocActive, { passive: true });
 
 async function bootData() {
   const meta = await api.meta();
