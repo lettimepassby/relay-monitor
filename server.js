@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { readFile } from "node:fs/promises";
 
 import { Store } from "./lib/store.js";
-import { queryStation, STATION_TYPES } from "./lib/providers.js";
+import { queryStation, queryStationUsage, STATION_TYPES } from "./lib/providers.js";
 import { SessionManager, verifyPassword } from "./lib/auth.js";
 import { History } from "./lib/history.js";
 import { evaluateStation } from "./lib/alerts.js";
@@ -354,6 +354,38 @@ app.get("/api/stations/:id/history", (req, res) => {
     points: history.points(s.id, hours),
     prediction: history.predict(s.id),
   });
+});
+
+// ---- 用量统计（分模型 / 分时间）------------------------------------------------
+// 各站点用量接口逐个查开销不小，按范围缓存 60 秒
+const usageCache = new Map();
+app.get("/api/usage", async (req, res) => {
+  const range = ["today", "7d", "30d"].includes(req.query.range) ? req.query.range : "today";
+  const hit = usageCache.get(range);
+  if (hit && Date.now() - hit.at < 60000) return res.json(hit.payload);
+
+  const midnight = new Date();
+  midnight.setHours(0, 0, 0, 0);
+  const days = range === "30d" ? 29 : range === "7d" ? 6 : 0;
+  const startMs = midnight.getTime() - days * 86400000;
+  const endMs = Date.now();
+  const granularity = range === "today" ? "hour" : "day";
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+  const stations = await Promise.all(store.list().map(async (s) => {
+    const meta = { id: s.id, name: s.name, type: s.type };
+    try {
+      const u = await queryStationUsage(s, { startMs, endMs, granularity, tz });
+      return { ...meta, ok: true, ...u };
+    } catch (err) {
+      return { ...meta, ok: false, error: err?.message || String(err) };
+    }
+  }));
+  await store.save(); // sub2api 密码模式可能在查询中轮换了令牌
+
+  const payload = { range, granularity, startMs, endMs, stations, generatedAt: new Date().toISOString() };
+  usageCache.set(range, { at: Date.now(), payload });
+  res.json(payload);
 });
 
 // ---- 通知渠道 ----------------------------------------------------------------

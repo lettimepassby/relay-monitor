@@ -6,6 +6,9 @@ ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=8787
 
+# 支持 TZ 环境变量（「今日」统计边界按此时区计算）
+RUN apk add --no-cache tzdata
+
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 

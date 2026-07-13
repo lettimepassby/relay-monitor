@@ -9,6 +9,8 @@ services:
       - "8787:8787"
     environment:
       - HOST=0.0.0.0
+      # 「今日消耗 / 用量统计」的日期边界按此时区计算
+      - TZ=Asia/Shanghai
     volumes:
       - ./data:/app/data
 
@@ -24,5 +26,5 @@ services:
     environment:
       # 新版 Docker 守护进程要求 API >= 1.40，watchtower 默认协商值过老
       - DOCKER_API_VERSION=1.44
-    # 每 5 分钟检查一次 relay-monitor 的新镜像，更新后清理旧镜像
-    command: --cleanup --interval 300 relay-monitor
+    # 每分钟检查一次 relay-monitor 的新镜像，更新后清理旧镜像
+    command: --cleanup --interval 60 relay-monitor

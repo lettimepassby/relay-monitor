@@ -23,6 +23,7 @@ const state = {
   types: [], channelTypes: [], channels: [], rules: {},
   view: "dashboard", user: null, app: null,
   trendHours: 24, overview: null, // 总览趋势图的时间范围与数据缓存 {hours, series, at}
+  usageRange: "today", usageStation: "all", usageData: null, // 用量统计页
 };
 let autoTimer = null;
 
@@ -52,6 +53,7 @@ const api = {
   refreshAll: () => call("/api/refresh", { method: "POST", body: {} }),
   historyOf: (id, hours) => call(`/api/stations/${id}/history?hours=${hours}`),
   overview: (hours) => call(`/api/history/overview?hours=${hours}`),
+  usage: (range) => call(`/api/usage?range=${range}`),
   saveSettings: (b) => call("/api/settings", { method: "PUT", body: b }),
   notifications: () => call("/api/notifications"),
   addChannel: (b) => call("/api/notifications/channels", { body: b }),
@@ -546,6 +548,227 @@ function etaRuleDisplay(r) {
   return r.etaUnit === "hours" ? +(days * 24).toFixed(2) : +days.toFixed(2);
 }
 
+// ---- 用量统计页 ----------------------------------------------------------------
+const USAGE_RANGES = [["today", "今天"], ["7d", "近 7 天"], ["30d", "近 30 天"]];
+
+function renderUsage() {
+  $("#headerActions").innerHTML = `
+    <button class="btn btn-ghost" id="usageRefresh"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>刷新</button>`;
+  $("#content").innerHTML = `
+    <div class="usage-filters">
+      <div class="seg" id="usageRange">${USAGE_RANGES.map(([v, l]) =>
+        `<button data-range="${v}" class="${state.usageRange === v ? "active" : ""}">${l}</button>`).join("")}</div>
+      <select class="select usage-station" id="usageStation">
+        <option value="all">全部中转站</option>
+        ${state.stations.map((s) => `<option value="${s.id}"${state.usageStation === s.id ? " selected" : ""}>${esc(s.name)}</option>`).join("")}
+      </select>
+    </div>
+    <div id="usageBody"><div class="chart-empty">加载中…</div></div>`;
+  $("#usageStation").onchange = () => { state.usageStation = $("#usageStation").value; renderUsageBody(); };
+  loadUsage();
+}
+
+async function loadUsage(force) {
+  const range = state.usageRange;
+  const cached = state.usageData;
+  if (!force && cached && cached.range === range && Date.now() - cached.at < 30000) {
+    renderUsageBody();
+    return;
+  }
+  try {
+    const r = await api.usage(range);
+    state.usageData = { ...r, at: Date.now() };
+    if (state.view === "usage" && state.usageRange === range) renderUsageBody();
+  } catch (e) {
+    if (e instanceof AuthError) return;
+    const el = $("#usageBody");
+    if (el) el.innerHTML = `<div class="chart-empty">${esc(e.message)}</div>`;
+  }
+}
+
+function renderUsageBody() {
+  const el = $("#usageBody");
+  if (!el || !state.usageData) return;
+  const data = state.usageData;
+  const sts = state.usageStation === "all" ? data.stations : data.stations.filter((s) => s.id === state.usageStation);
+  const okSts = sts.filter((s) => s.ok);
+  const errSts = sts.filter((s) => !s.ok);
+
+  // 跨站点汇总：按模型名合并
+  const mmap = new Map();
+  for (const s of okSts) for (const m of s.models || []) {
+    const acc = mmap.get(m.model) || { model: m.model, tokens: 0, cost: 0, requests: 0, inputTokens: 0, outputTokens: 0, hasIO: false };
+    acc.tokens += m.tokens || 0; acc.cost += m.cost || 0; acc.requests += m.requests || 0;
+    if (m.inputTokens != null) { acc.inputTokens += m.inputTokens || 0; acc.outputTokens += m.outputTokens || 0; acc.hasIO = true; }
+    mmap.set(m.model, acc);
+  }
+  const models = [...mmap.values()].sort((a, b) => b.tokens - a.tokens);
+
+  // 按时间桶合并（不同提供商的桶统一成展示标签）
+  const bucketLabel = (p) => {
+    if (p.t != null) {
+      const d = new Date(p.t);
+      return data.granularity === "hour"
+        ? `${String(d.getHours()).padStart(2, "0")}:00`
+        : `${d.getMonth() + 1}/${d.getDate()}`;
+    }
+    return p.label || "?";
+  };
+  const bmap = new Map();
+  for (const s of okSts) for (const p of s.trend || []) {
+    const k = bucketLabel(p);
+    const acc = bmap.get(k) || { label: k, t: p.t ?? Infinity, tokens: 0, cost: 0, requests: 0 };
+    acc.tokens += p.tokens || 0; acc.cost += p.cost || 0; acc.requests += p.requests || 0;
+    acc.t = Math.min(acc.t, p.t ?? Infinity);
+    bmap.set(k, acc);
+  }
+  const buckets = [...bmap.values()].sort((a, b) => a.t - b.t);
+
+  const totTokens = models.reduce((a, m) => a + m.tokens, 0);
+  const totCost = models.reduce((a, m) => a + m.cost, 0);
+  const totReqs = models.reduce((a, m) => a + m.requests, 0);
+
+  el.innerHTML = `
+    <div class="stats">
+      <div class="stat-card"><div class="label">总 Tokens</div><div class="value">${fmtTokens(totTokens)}</div></div>
+      <div class="stat-card"><div class="label">实际消耗</div><div class="value">${usd(totCost)}</div></div>
+      <div class="stat-card"><div class="label">请求数</div><div class="value">${totReqs.toLocaleString("en-US")}</div></div>
+      <div class="stat-card"><div class="label">数据来源</div><div class="value">${okSts.length}<small>/ ${sts.length} 个站点</small></div></div>
+    </div>
+    ${errSts.length ? `<div class="usage-errors">${errSts.map((s) =>
+      `<span>⚠ ${esc(s.name)}：${esc(s.error)}</span>`).join("")}</div>` : ""}
+    <div class="charts-grid">
+      <div class="panel chart-card">
+        <div class="chart-card-head"><div><h3>Token 消耗趋势</h3><div class="chart-sub">${data.granularity === "hour" ? "按小时" : "按天"}汇总</div></div></div>
+        <div class="chart-wrap" id="usageTrendChart"></div>
+      </div>
+      <div class="panel chart-card">
+        <div class="chart-card-head"><div><h3>分模型 Token</h3><div class="chart-sub">按用量降序，最多显示 10 项</div></div></div>
+        <div class="chart-wrap" id="usageModelChart"></div>
+      </div>
+    </div>
+    <div class="section-head"><h2>模型明细</h2><span class="muted">共 ${models.length} 个模型</span></div>
+    <div class="panel u-table-wrap">
+      <table class="u-table">
+        <thead><tr><th>模型</th><th>请求数</th><th>输入 Tokens</th><th>输出 Tokens</th><th>总 Tokens</th><th>实际消耗</th></tr></thead>
+        <tbody>
+          ${models.map((m) => `<tr>
+            <td class="mono">${esc(m.model)}</td>
+            <td>${m.requests.toLocaleString("en-US")}</td>
+            <td>${m.hasIO ? fmtTokens(m.inputTokens) : "—"}</td>
+            <td>${m.hasIO ? fmtTokens(m.outputTokens) : "—"}</td>
+            <td>${fmtTokens(m.tokens)}</td>
+            <td>${usd(m.cost)}</td>
+          </tr>`).join("") || '<tr><td colspan="6" class="u-empty">该范围内暂无用量数据</td></tr>'}
+        </tbody>
+      </table>
+    </div>`;
+  drawUsageTrend($("#usageTrendChart"), buckets);
+  drawUsageModels($("#usageModelChart"), models);
+}
+
+// 时间桶柱状图：单一色相，柱顶 4px 圆角，悬停显示 tokens / 消耗 / 请求
+function drawUsageTrend(wrap, buckets) {
+  if (!buckets.length || buckets.every((b) => !b.tokens)) {
+    wrap.innerHTML = '<div class="chart-empty">该范围内暂无用量数据</div>';
+    return;
+  }
+  const W = 560, H = 210, L = 52, R = 12, T = 12, B = 26;
+  const iw = W - L - R, ih = H - T - B;
+  const n = buckets.length;
+  const slot = iw / n;
+  const bw = Math.max(2, Math.min(24, slot - 2)); // ≤24px 粗，留 2px 间隙
+  const maxV = Math.max(...buckets.map((b) => b.tokens), 1);
+  const step = niceStep(maxV / 3);
+  const yMax = Math.max(step * Math.ceil((maxV * 1.05) / step), step);
+  const y = (v) => T + (1 - v / yMax) * ih;
+
+  let grid = "", labels = "";
+  for (let i = 0; i * step <= yMax + 1e-9; i++) {
+    const v = +(i * step).toFixed(6);
+    grid += `<line class="chart-grid" x1="${L}" y1="${y(v)}" x2="${W - R}" y2="${y(v)}"/>`;
+    labels += `<text class="chart-axis-label" x="${L - 6}" y="${y(v) + 3}" text-anchor="end">${fmtTokens(v)}</text>`;
+  }
+  const every = Math.max(1, Math.ceil(n / 7)); // x 轴最多 ~7 个刻度
+  const cols = buckets.map((b, i) => {
+    const cx = L + slot * i + slot / 2;
+    const x0 = cx - bw / 2;
+    const yTop = y(b.tokens);
+    const h = T + ih - yTop;
+    const r = Math.min(4, bw / 2, h);
+    const bar = h <= 0.5
+      ? ""
+      : `<path class="chart-bar" d="M${x0},${(yTop + r).toFixed(1)} a${r},${r} 0 0 1 ${r},-${r} h${(bw - 2 * r).toFixed(1)} a${r},${r} 0 0 1 ${r},${r} v${(h - r).toFixed(1)} h-${bw} z"/>`;
+    const lb = i % every === 0
+      ? `<text class="chart-axis-label" x="${cx}" y="${H - 8}" text-anchor="middle">${esc(b.label)}</text>` : "";
+    return `<g>${bar}${lb}<rect class="u-hit" data-i="${i}" x="${L + slot * i}" y="${T}" width="${slot}" height="${ih}" fill="transparent"/></g>`;
+  }).join("");
+
+  wrap.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Token 消耗趋势">${grid}${labels}${cols}</svg><div class="chart-tip"></div>`;
+  attachUsageTip(wrap, (i) => {
+    const b = buckets[i];
+    return `<div class="t">${esc(b.label)}</div><div class="v">${fmtTokens(b.tokens)} tokens</div>` +
+      `<div class="r"><span>消耗</span><b>${usd(b.cost)}</b></div><div class="r"><span>请求</span><b>${b.requests.toLocaleString("en-US")}</b></div>`;
+  });
+}
+
+// 分模型横向条形图：数值直接标在条端
+function drawUsageModels(wrap, models) {
+  if (!models.length) {
+    wrap.innerHTML = '<div class="chart-empty">该范围内暂无用量数据</div>';
+    return;
+  }
+  let items = models;
+  if (items.length > 10) {
+    const rest = items.slice(9);
+    items = items.slice(0, 9);
+    items.push({
+      model: `其他 ${rest.length} 个`,
+      tokens: rest.reduce((a, x) => a + x.tokens, 0),
+      cost: rest.reduce((a, x) => a + x.cost, 0),
+      requests: rest.reduce((a, x) => a + x.requests, 0),
+    });
+  }
+  const W = 380, rowH = 30, T = 6, B = 6, nameW = 130, valW = 56;
+  const barMax = W - nameW - valW - 12;
+  const H = T + items.length * rowH + B;
+  const max = Math.max(...items.map((x) => x.tokens), 1);
+  const rows = items.map((x, i) => {
+    const yTop = T + i * rowH + (rowH - 16) / 2;
+    const w = Math.max(2, (x.tokens / max) * barMax);
+    const r = Math.min(4, w / 2);
+    const bar = `M${nameW},${yTop} h${(w - r).toFixed(1)} a${r},${r} 0 0 1 ${r},${r} v${16 - 2 * r} a${r},${r} 0 0 1 -${r},${r} h-${(w - r).toFixed(1)} z`;
+    return `<g>
+      <text class="bar-name" x="${nameW - 8}" y="${yTop + 12}" text-anchor="end">${esc(truncateLabel(x.model, 20))}</text>
+      <path class="chart-bar" d="${bar}"/>
+      <text class="bar-value" x="${nameW + w + 6}" y="${yTop + 12}">${fmtTokens(x.tokens)}</text>
+      <rect class="u-hit" data-i="${i}" x="0" y="${T + i * rowH}" width="${W}" height="${rowH}" fill="transparent"/>
+    </g>`;
+  }).join("");
+  wrap.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="分模型 Token 用量">${rows}</svg><div class="chart-tip"></div>`;
+  attachUsageTip(wrap, (i) => {
+    const m = items[i];
+    return `<div class="t">${esc(m.model)}</div><div class="v">${fmtTokens(m.tokens)} tokens</div>` +
+      `<div class="r"><span>消耗</span><b>${usd(m.cost)}</b></div><div class="r"><span>请求</span><b>${m.requests.toLocaleString("en-US")}</b></div>`;
+  });
+}
+
+// 共用的悬停提示：命中 [data-i] 区域时按索引取内容
+function attachUsageTip(wrap, contentOf) {
+  const svg = wrap.querySelector("svg");
+  const tip = wrap.querySelector(".chart-tip");
+  svg.addEventListener("mousemove", (e) => {
+    const hit = e.target.closest("[data-i]");
+    if (!hit) { tip.style.display = "none"; return; }
+    tip.style.display = "block";
+    tip.innerHTML = contentOf(Number(hit.dataset.i));
+    const rect = wrap.getBoundingClientRect();
+    tip.style.left = Math.min(e.clientX - rect.left + 14, rect.width - 160) + "px";
+    tip.style.top = Math.max(4, e.clientY - rect.top - 44) + "px";
+  });
+  svg.addEventListener("mouseleave", () => { tip.style.display = "none"; });
+}
+
 // ---- 设置页 -----------------------------------------------------------------
 function renderSettings() {
   $("#headerActions").innerHTML = "";
@@ -615,6 +838,7 @@ function render() {
   const titles = {
     dashboard: ["总览", "跨中转站的余额与用量一览"],
     stations: ["中转站", "管理你的 sub2api / new-api 中转站"],
+    usage: ["用量统计", "分站点、分模型、分时段的 Token 消耗"],
     notify: ["通知", "告警渠道与触发规则"],
     settings: ["设置", "刷新策略、告警阈值与面板账号"],
   };
@@ -623,6 +847,7 @@ function render() {
   document.querySelectorAll(".nav-item").forEach((n) => n.classList.toggle("active", n.dataset.view === state.view));
   if (state.view === "dashboard") renderDashboard();
   else if (state.view === "stations") renderStations();
+  else if (state.view === "usage") renderUsage();
   else if (state.view === "notify") renderNotify();
   else renderSettings();
   const ver = state.app ? `v${state.app.version}${state.app.commit ? ` (${state.app.commit})` : ""}` : "";
@@ -924,6 +1149,21 @@ $(".main").addEventListener("click", async (e) => {
     state.trendHours = Number(rangeBtn.dataset.hours);
     document.querySelectorAll("#ovRange button").forEach((b) => b.classList.toggle("active", b === rangeBtn));
     mountOverviewChart();
+    return;
+  }
+
+  // 用量统计页：范围切换 / 手动刷新
+  const uRange = e.target.closest("#usageRange [data-range]");
+  if (uRange) {
+    state.usageRange = uRange.dataset.range;
+    document.querySelectorAll("#usageRange button").forEach((b) => b.classList.toggle("active", b === uRange));
+    loadUsage();
+    return;
+  }
+  const uRefresh = e.target.closest("#usageRefresh");
+  if (uRefresh) {
+    uRefresh.classList.add("spin");
+    loadUsage(true).finally(() => uRefresh.classList.remove("spin"));
     return;
   }
 

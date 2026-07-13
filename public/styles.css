@@ -297,6 +297,25 @@ button { font-family: inherit; cursor: pointer; }
 .chart-tip .r b { color: var(--text-primary); font-weight: 500; font-variant-numeric: tabular-nums; }
 @media (max-width: 900px) { .charts-grid { grid-template-columns: 1fr; } }
 
+/* ---- 用量统计页 ---- */
+.usage-filters { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.usage-filters .usage-station { width: auto; min-width: 150px; height: 30px; font-size: 12.5px; }
+.usage-errors {
+  display: flex; flex-wrap: wrap; gap: 8px 16px; margin: -6px 0 14px;
+  font-size: 11.5px; color: var(--text-warning);
+}
+.u-table-wrap { overflow-x: auto; }
+.u-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.u-table th {
+  text-align: right; font-weight: 500; font-size: 11.5px; color: var(--text-tertiary);
+  padding: 10px 16px; border-bottom: 1px solid var(--border); white-space: nowrap;
+}
+.u-table td { text-align: right; padding: 9px 16px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+.u-table th:first-child, .u-table td:first-child { text-align: left; }
+.u-table tr:last-child td { border-bottom: none; }
+.u-table td.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.u-table td.u-empty { text-align: center; color: var(--text-tertiary); padding: 28px; }
+
 /* ---- 弹窗宽版 + 趋势图 ---- */
 .modal-wide { width: min(680px, 100%); }
 .trend-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
