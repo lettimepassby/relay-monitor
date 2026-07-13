@@ -24,7 +24,7 @@ const state = {
   view: "dashboard", user: null, app: null,
   trendHours: 24, overview: null, // 总览趋势图的时间范围与数据缓存 {hours, series, at}
   usageRange: "today", usageStation: "all", usageData: null, // 用量统计页
-  ownRange: "7d", ownData: null, // 我的站点分析页
+  ownRange: "today", ownData: null, // 我的站点分析页（默认看今天）
 };
 let autoTimer = null;
 

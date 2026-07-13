@@ -261,10 +261,48 @@ button { font-family: inherit; cursor: pointer; }
 @media (max-width: 1000px) {
   .stats.stats-5 { grid-template-columns: repeat(3, 1fr); }
 }
+
+/* ---- 移动端适配 ---- */
 @media (max-width: 720px) {
-  .stats, .stats.stats-5 { grid-template-columns: repeat(2, 1fr); }
+  :root, :root[data-theme="light"], :root[data-theme="dark"] { --content-padding: 12px; }
+  .window {
+    width: 100vw; height: 100dvh; margin: 0; border-radius: 0; box-shadow: none;
+  }
+  .traffic { display: none; }
+  .titlebar { padding: 0 10px; }
+  .titlebar-title { position: static; transform: none; }
+
+  /* 侧栏变为顶部横向导航 */
+  .shell { flex-direction: column; }
+  .sidebar {
+    width: 100%; flex-direction: row; align-items: center; gap: 2px;
+    padding: 6px 8px; overflow-x: auto; -webkit-overflow-scrolling: touch;
+    border-right: none; border-bottom: 1px solid var(--border); flex-shrink: 0;
+  }
+  .sidebar::-webkit-scrollbar { display: none; }
+  .brand, .nav-label, .sidebar-foot { display: none; }
+  .nav-item { width: auto; flex: 0 0 auto; height: 32px; padding: 0 12px; margin-bottom: 0; }
+
+  .page-header { padding: 12px var(--content-padding) 0; flex-wrap: wrap; }
+  .page-header h1 { font-size: 17px; }
+  .content { padding: 12px var(--content-padding) 20px; }
+
+  .stats, .stats.stats-5 { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .stat-card { padding: 10px 12px; }
+  .stat-card .value { font-size: 18px; }
+
   .st-bar { display: none; }
+  .st-row { gap: 10px; padding: 11px 12px; }
+  .st-plate { width: 32px; height: 32px; }
+  .st-balance { min-width: 84px; }
+  .st-balance .amt { font-size: 15px; }
+
+  .usage-filters { flex-wrap: wrap; }
+  .dr-channels { max-width: 100%; justify-content: flex-start; }
+  .purchase-row { flex-wrap: wrap; }
   .trend-stats { grid-template-columns: repeat(2, 1fr); }
+  .set-row { flex-wrap: wrap; }
+  .report-frame { height: 52vh; }
 }
 
 /* ---- 登录屏 ---- */
