@@ -481,6 +481,7 @@ function redact(s) {
       ? { expiresAt: s2Tokens.expiresAt || null, lastLoginAt: s2Tokens.lastLoginAt || null }
       : null,
     prediction: history.predict(s.id),
+    spark: history.sparkline(s.id, 48),
     todayUsed: fromSite ?? history.usedSince(s.id, midnight.getTime()),
     todayIsEstimate: fromSite == null,
     todayTokens: s.balance?.todayTokens ?? null,

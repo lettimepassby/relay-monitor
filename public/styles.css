@@ -151,11 +151,10 @@ button { font-family: inherit; cursor: pointer; }
 }
 .st-meta { font-size: 11.5px; color: var(--text-tertiary); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .st-bar { display: flex; align-items: center; gap: 10px; margin-top: 7px; }
-.progress { height: 5px; border-radius: 3px; background: rgba(0,0,0,.06); overflow: hidden; flex: 1; max-width: 260px; }
-:root[data-theme="dark"] .progress { background: rgba(255,255,255,.08); }
-.progress > i { display: block; height: 100%; background: var(--primary); transition: width .3s; }
-.progress > i.warn { background: var(--text-warning); }
-.progress > i.danger { background: var(--text-danger); }
+.spark { width: 170px; height: 30px; flex-shrink: 0; }
+.spark-line { fill: none; stroke: var(--primary); stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; }
+.spark-area { fill: var(--primary); opacity: .08; }
+.spark-dot { fill: var(--primary); stroke: var(--bg-surface); stroke-width: 1.5; }
 .st-usage { font-size: 11px; color: var(--text-tertiary); white-space: nowrap; }
 
 .st-balance { text-align: right; flex-shrink: 0; min-width: 108px; }

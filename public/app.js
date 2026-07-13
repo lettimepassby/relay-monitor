@@ -165,12 +165,30 @@ $("#logoutBtn").onclick = async () => {
 const PLATE = { newapi: "NA", "newapi-key": "KEY", sub2api: "S2", "sub2api-password": "S2" };
 const CH_PLATE = { telegram: "TG", dingtalk: "DT", wecom: "WC", feishu: "FS", bark: "BK", ntfy: "NF", serverchan: "SC", resend: "RS", smtp: "SM", webhook: "WH" };
 
+// 站点卡片里的迷你余额走势（近 48 小时）：陡降 = 消耗快，平线 = 闲置，跳升 = 充值
+function sparkSvg(pts) {
+  if (!pts || pts.length < 2) return "";
+  const W = 170, H = 30, P = 3;
+  const t0 = pts[0][0], t1 = pts[pts.length - 1][0];
+  let min = Infinity, max = -Infinity;
+  for (const [, v] of pts) { if (v < min) min = v; if (v > max) max = v; }
+  if (max - min < 1e-9) { min -= 1; max += 1; } // 余额没变化时画一条居中的平线
+  const x = (t) => P + ((t - t0) / (t1 - t0 || 1)) * (W - 2 * P);
+  const y = (v) => P + (1 - (v - min) / (max - min)) * (H - 2 * P);
+  const line = pts.map((p, i) => `${i ? "L" : "M"}${x(p[0]).toFixed(1)},${y(p[1]).toFixed(1)}`).join("");
+  const area = `${line}L${x(t1).toFixed(1)},${H - P}L${x(t0).toFixed(1)},${H - P}Z`;
+  const last = pts[pts.length - 1];
+  return `<svg class="spark" viewBox="0 0 ${W} ${H}" aria-hidden="true">
+    <path class="spark-area" d="${area}"/><path class="spark-line" d="${line}"/>
+    <circle class="spark-dot" cx="${x(last[0]).toFixed(1)}" cy="${y(last[1]).toFixed(1)}" r="2.5"/>
+  </svg>`;
+}
+
 function stationRow(s) {
   const st = statusOf(s);
   const b = s.balance;
   const rate = rateOf(s);
   const cls = st === "danger" || st === "error" ? "danger" : st === "warn" ? "warn" : "";
-  const usedPct = b && b.ok && b.total > 0 ? Math.min(100, Math.round((b.used / b.total) * 100)) : 0;
   const amount = b && b.ok ? cny(b.remaining * rate) : "—";
   let meta;
   if (b && b.ok) {
@@ -187,8 +205,9 @@ function stationRow(s) {
   } else {
     meta = `${esc(typeLabel(s.type))} · 尚未查询`;
   }
-  const bar = b && b.ok
-    ? `<div class="st-bar"><div class="progress"><i class="${cls}" style="width:${usedPct}%"></i></div><span class="st-usage">已用 ${cny(b.used * rate)} / ${cny(b.total * rate)}</span></div>`
+  const spark = sparkSvg(s.spark);
+  const bar = b && b.ok && spark
+    ? `<div class="st-bar" title="近 48 小时余额走势">${spark}<span class="st-usage">近 48h 余额</span></div>`
     : "";
   const eta = etaText(s.prediction, rate);
   const pieces = [];
