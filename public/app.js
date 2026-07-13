@@ -130,10 +130,10 @@ function fmtEtaText(days) {
 }
 function etaText(p, rate = 1) {
   if (!p) return null;
-  if (p.burnPerDay === 0) return { text: "近期无消耗", cls: "" };
+  if (p.burnPerDay === 0) return { text: `${p.basis || "近期"}无消耗`, cls: "" };
   if (p.etaDays == null) return null;
   const cls = p.etaDays <= (state.rules.etaDays ?? 3) ? "danger" : p.etaDays <= 7 ? "warn" : "";
-  return { text: `≈ ${cny(p.burnPerDay * rate)}/天 · 预计 ${fmtEtaText(p.etaDays)}后耗尽`, cls };
+  return { text: `≈ ${cny(p.burnPerDay * rate)}/天（${p.basis || "估算"}）· 预计 ${fmtEtaText(p.etaDays)}后耗尽`, cls };
 }
 
 // ---- 登录 -------------------------------------------------------------------
