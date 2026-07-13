@@ -22,6 +22,7 @@ const state = {
   stations: [], settings: { refreshIntervalSec: 60, lowBalanceUsd: 5 },
   types: [], channelTypes: [], channels: [], rules: {},
   view: "dashboard", user: null,
+  trendHours: 24, overview: null, // 总览趋势图的时间范围与数据缓存 {hours, series, at}
 };
 let autoTimer = null;
 
@@ -50,6 +51,7 @@ const api = {
   refreshOne: (id) => call(`/api/stations/${id}/refresh`, { method: "POST", body: {} }),
   refreshAll: () => call("/api/refresh", { method: "POST", body: {} }),
   historyOf: (id, hours) => call(`/api/stations/${id}/history?hours=${hours}`),
+  overview: (hours) => call(`/api/history/overview?hours=${hours}`),
   saveSettings: (b) => call("/api/settings", { method: "PUT", body: b }),
   notifications: () => call("/api/notifications"),
   addChannel: (b) => call("/api/notifications/channels", { body: b }),
@@ -146,7 +148,7 @@ $("#logoutBtn").onclick = async () => {
 
 // ---- 渲染 -----------------------------------------------------------------
 const PLATE = { newapi: "NA", "newapi-key": "KEY", sub2api: "S2", "sub2api-password": "S2" };
-const CH_PLATE = { telegram: "TG", dingtalk: "DT", wecom: "WC", feishu: "FS", bark: "BK", ntfy: "NF", serverchan: "SC", webhook: "WH" };
+const CH_PLATE = { telegram: "TG", dingtalk: "DT", wecom: "WC", feishu: "FS", bark: "BK", ntfy: "NF", serverchan: "SC", resend: "RS", smtp: "SM", webhook: "WH" };
 
 function stationRow(s) {
   const st = statusOf(s);
@@ -216,11 +218,213 @@ function renderDashboard() {
     <div class="stat-card"><div class="label">低余额 / 耗尽</div><div class="value ${lowCount ? "warn" : ""}">${lowCount}<small>个</small></div></div>
     <div class="stat-card"><div class="label">查询异常</div><div class="value ${errCount ? "danger" : ""}">${errCount}<small>个</small></div></div>
   </div>`;
+  const RANGES = [[24, "24 小时"], [72, "3 天"], [168, "7 天"], [720, "30 天"]];
+  const charts = list.length ? `
+  <div class="charts-grid">
+    <div class="panel chart-card">
+      <div class="chart-card-head">
+        <div><h3>总余额趋势</h3><div class="chart-sub">全部中转站剩余余额合计</div></div>
+        <div class="seg" id="ovRange">${RANGES.map(([h, l]) =>
+          `<button data-hours="${h}" class="${state.trendHours === h ? "active" : ""}">${l}</button>`).join("")}</div>
+      </div>
+      <div class="chart-wrap" id="ovChart"><div class="chart-empty">加载中…</div></div>
+    </div>
+    <div class="panel chart-card">
+      <div class="chart-card-head">
+        <div><h3>日均消耗对比</h3><div class="chart-sub">按近 48 小时消耗速度回归估算（$/天）</div></div>
+      </div>
+      <div class="chart-wrap" id="burnChart"></div>
+    </div>
+  </div>` : "";
   const body = list.length
     ? `<div class="section-head"><h2>中转站余额</h2><span class="muted">共 ${list.length} 个 · 累计已用 ${usd(totalUsed)}</span></div>
        <div class="panel">${list.map(stationRow).join("")}</div>`
     : emptyState();
-  $("#content").innerHTML = stats + body;
+  $("#content").innerHTML = stats + charts + body;
+  if (list.length) {
+    drawBurnBars($("#burnChart"), list);
+    mountOverviewChart();
+  }
+}
+
+// ---- 总览图表 ---------------------------------------------------------------
+// 缓存优先绘制，后台刷新后重绘，避免每次自动刷新都闪一次“加载中”
+async function mountOverviewChart() {
+  const hours = state.trendHours;
+  const ov = state.overview;
+  const el = $("#ovChart");
+  if (!el) return;
+  if (ov && ov.hours === hours) drawTotalChart(el, ov);
+  if (ov && ov.hours === hours && Date.now() - ov.at < 30000) return;
+  try {
+    const r = await api.overview(hours);
+    state.overview = { hours, series: r.series, at: Date.now() };
+    const el2 = $("#ovChart");
+    if (el2 && state.view === "dashboard" && state.trendHours === hours) drawTotalChart(el2, state.overview);
+  } catch (e) {
+    if (!(e instanceof AuthError) && !state.overview) el.innerHTML = `<div class="chart-empty">${esc(e.message)}</div>`;
+  }
+}
+
+// 聚合全部站点：时间并集 + 各站前向填充求和
+function drawTotalChart(wrap, ov) {
+  const seriesList = ov.series.filter((s) => s.points && s.points.length);
+  const times = [];
+  for (const s of seriesList) for (const p of s.points) times.push(p[0]);
+  times.sort((a, b) => a - b);
+  const uniq = [];
+  for (const t of times) if (!uniq.length || t - uniq[uniq.length - 1] > 30000) uniq.push(t);
+  if (uniq.length < 2) {
+    wrap.innerHTML = '<div class="chart-empty">数据积累中（需要至少两次成功查询）</div>';
+    return;
+  }
+  const idx = seriesList.map(() => -1);
+  const totals = [], breakdown = [];
+  for (const t of uniq) {
+    let sum = 0;
+    const bd = [];
+    seriesList.forEach((s, i) => {
+      while (idx[i] + 1 < s.points.length && s.points[idx[i] + 1][0] <= t) idx[i]++;
+      if (idx[i] >= 0) {
+        const v = s.points[idx[i]][1];
+        sum += v;
+        bd.push([s.name, v]);
+      }
+    });
+    totals.push([t, Math.round(sum * 100) / 100]);
+    breakdown.push(bd);
+  }
+
+  const W = 560, H = 210, L = 52, R = 12, T = 12, B = 26;
+  const iw = W - L - R, ih = H - T - B;
+  const t0 = totals[0][0], t1 = totals[totals.length - 1][0];
+  const maxV = Math.max(...totals.map((p) => p[1]), 0.01);
+  const step = niceStep(maxV / 3);
+  const yMax = Math.max(step * Math.ceil((maxV * 1.05) / step), step);
+  const x = (t) => L + ((t - t0) / (t1 - t0 || 1)) * iw;
+  const y = (v) => T + (1 - v / yMax) * ih;
+
+  let grid = "", labels = "";
+  for (let i = 0; i * step <= yMax + 1e-9; i++) {
+    const v = +(i * step).toFixed(6);
+    grid += `<line class="chart-grid" x1="${L}" y1="${y(v)}" x2="${W - R}" y2="${y(v)}"/>`;
+    labels += `<text class="chart-axis-label" x="${L - 6}" y="${y(v) + 3}" text-anchor="end">$${v >= 100 ? Math.round(v).toLocaleString("en-US") : v}</text>`;
+  }
+  for (const f of [0, 0.5, 1]) {
+    const t = t0 + (t1 - t0) * f;
+    labels += `<text class="chart-axis-label" x="${x(t)}" y="${H - 8}" text-anchor="${f === 0 ? "start" : f === 1 ? "end" : "middle"}">${fmtClock(t)}</text>`;
+  }
+
+  const linePath = totals.map((p, i) => `${i ? "L" : "M"}${x(p[0]).toFixed(1)},${y(p[1]).toFixed(1)}`).join("");
+  const areaPath = linePath + `L${x(t1).toFixed(1)},${y(0)}L${x(t0).toFixed(1)},${y(0)}Z`;
+
+  wrap.innerHTML = `
+    <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="全部中转站总余额趋势">
+      ${grid}${labels}
+      <path class="chart-area" d="${areaPath}"/>
+      <path class="chart-line" d="${linePath}"/>
+      <line class="chart-crosshair" id="ovX" y1="${T}" y2="${T + ih}" visibility="hidden"/>
+      <circle class="chart-hover-dot" id="ovDot" r="4" visibility="hidden"/>
+      <rect id="ovOverlay" x="${L}" y="${T}" width="${iw}" height="${ih}" fill="transparent"/>
+    </svg>
+    <div class="chart-tip" id="ovTip"></div>`;
+
+  const svg = wrap.querySelector("svg");
+  const overlay = wrap.querySelector("#ovOverlay");
+  const cross = wrap.querySelector("#ovX");
+  const dot = wrap.querySelector("#ovDot");
+  const tip = wrap.querySelector("#ovTip");
+  overlay.addEventListener("mousemove", (e) => {
+    const rect = svg.getBoundingClientRect();
+    const mx = ((e.clientX - rect.left) / rect.width) * W;
+    const mt = t0 + ((mx - L) / iw) * (t1 - t0);
+    let bi = 0;
+    for (let i = 0; i < totals.length; i++) {
+      if (Math.abs(totals[i][0] - mt) < Math.abs(totals[bi][0] - mt)) bi = i;
+    }
+    const [pt, pv] = totals[bi];
+    const px = x(pt), py = y(pv);
+    cross.setAttribute("x1", px); cross.setAttribute("x2", px);
+    cross.setAttribute("visibility", "visible");
+    dot.setAttribute("cx", px); dot.setAttribute("cy", py);
+    dot.setAttribute("visibility", "visible");
+    const bd = [...breakdown[bi]].sort((a, b) => b[1] - a[1]);
+    const shown = bd.slice(0, 5);
+    const rest = bd.slice(5);
+    let rows = shown.map(([n, v]) => `<div class="r"><span>${esc(truncateLabel(n, 14))}</span><b>${usd(v)}</b></div>`).join("");
+    if (rest.length) rows += `<div class="r"><span>其他 ${rest.length} 个</span><b>${usd(rest.reduce((a, x) => a + x[1], 0))}</b></div>`;
+    tip.style.display = "block";
+    tip.innerHTML = `<div class="t">${fmtClock(pt)}</div><div class="v">合计 ${usd(pv)}</div>${rows}`;
+    const wrapRect = wrap.getBoundingClientRect();
+    const tipX = (px / W) * wrapRect.width;
+    tip.style.left = Math.min(Math.max(tipX + 12, 4), wrapRect.width - 150) + "px";
+    tip.style.top = Math.max(4, (py / H) * wrapRect.height - 40) + "px";
+  });
+  overlay.addEventListener("mouseleave", () => {
+    cross.setAttribute("visibility", "hidden");
+    dot.setAttribute("visibility", "hidden");
+    tip.style.display = "none";
+  });
+}
+
+// 各站日均消耗横向条形图：单一色相（对比的是数值不是身份），条端直接标数值
+function drawBurnBars(wrap, stations) {
+  let items = stations
+    .map((s) => ({ name: s.name, burn: s.prediction?.burnPerDay || 0, eta: s.prediction?.etaDays ?? null }))
+    .filter((x) => x.burn > 0)
+    .sort((a, b) => b.burn - a.burn);
+  if (!items.length) {
+    wrap.innerHTML = '<div class="chart-empty">暂无消耗数据（需要几次查询后才能估算）</div>';
+    return;
+  }
+  if (items.length > 8) {
+    const rest = items.slice(7);
+    items = items.slice(0, 7);
+    items.push({ name: `其他 ${rest.length} 个`, burn: Math.round(rest.reduce((a, x) => a + x.burn, 0) * 100) / 100, eta: null });
+  }
+  const W = 380, rowH = 32, T = 6, B = 6, nameW = 112, valW = 66;
+  const barMax = W - nameW - valW - 12;
+  const H = T + items.length * rowH + B;
+  const max = Math.max(...items.map((x) => x.burn));
+  const rows = items.map((x, i) => {
+    const yTop = T + i * rowH + (rowH - 18) / 2;
+    const w = Math.max(2, (x.burn / max) * barMax);
+    const r = Math.min(4, w / 2); // 数据端 4px 圆角，基线端直角
+    const bar = `M${nameW},${yTop} h${(w - r).toFixed(1)} a${r},${r} 0 0 1 ${r},${r} v${18 - 2 * r} a${r},${r} 0 0 1 -${r},${r} h-${(w - r).toFixed(1)} z`;
+    return `<g data-i="${i}">
+      <text class="bar-name" x="${nameW - 8}" y="${yTop + 13}" text-anchor="end">${esc(truncateLabel(x.name, 12))}</text>
+      <path class="chart-bar" d="${bar}"/>
+      <text class="bar-value" x="${nameW + w + 6}" y="${yTop + 13}">${usd(x.burn)}</text>
+      <rect class="bar-hit" data-i="${i}" x="0" y="${T + i * rowH}" width="${W}" height="${rowH}" fill="transparent"/>
+    </g>`;
+  }).join("");
+  wrap.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="各站日均消耗对比">${rows}</svg><div class="chart-tip" id="burnTip"></div>`;
+
+  const svg = wrap.querySelector("svg");
+  const tip = wrap.querySelector("#burnTip");
+  svg.addEventListener("mousemove", (e) => {
+    const hit = e.target.closest("[data-i]");
+    if (!hit) { tip.style.display = "none"; return; }
+    const it = items[Number(hit.dataset.i)];
+    tip.style.display = "block";
+    tip.innerHTML = `<div class="t">${esc(it.name)}</div><div class="v">${usd(it.burn)}/天</div>` +
+      (it.eta != null ? `<div class="t">预计 ${it.eta} 天后耗尽</div>` : "");
+    const wrapRect = wrap.getBoundingClientRect();
+    tip.style.left = Math.min(e.clientX - wrapRect.left + 14, wrapRect.width - 150) + "px";
+    tip.style.top = Math.max(4, e.clientY - wrapRect.top - 40) + "px";
+  });
+  svg.addEventListener("mouseleave", () => { tip.style.display = "none"; });
+}
+
+// CJK 按 2 个单位计宽的标签截断
+function truncateLabel(s, units = 14) {
+  let u = 0, out = "";
+  for (const ch of String(s)) {
+    u += /[⺀-꓏가-힣豈-﫿︰-﹏＀-￯]/.test(ch) ? 2 : 1;
+    if (u > units) return out + "…";
+    out += ch;
+  }
+  return s;
 }
 
 function renderStations() {
@@ -657,6 +861,15 @@ $(".main").addEventListener("click", async (e) => {
   if (e.target.closest("#hdrAddCh")) return openChModal(null);
   const hdrRefresh = e.target.closest("#hdrRefresh");
   if (hdrRefresh) return doRefreshAll(hdrRefresh);
+
+  // 总览趋势图时间范围切换（旧图保留到新数据画好，避免闪空）
+  const rangeBtn = e.target.closest("#ovRange [data-hours]");
+  if (rangeBtn) {
+    state.trendHours = Number(rangeBtn.dataset.hours);
+    document.querySelectorAll("#ovRange button").forEach((b) => b.classList.toggle("active", b === rangeBtn));
+    mountOverviewChart();
+    return;
+  }
 
   // 规则开关 / 保存
   const ruleToggle = e.target.closest("[data-rule]");

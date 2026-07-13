@@ -270,6 +270,26 @@ button { font-family: inherit; cursor: pointer; }
 }
 .rules-grid .set-row .field-inline .input.small { width: 76px; }
 
+/* ---- 总览图表 ---- */
+.charts-grid { display: grid; grid-template-columns: 3fr 2fr; gap: 10px; margin-bottom: 18px; }
+.chart-card { padding: 13px 15px 8px; }
+.chart-card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 8px; }
+.chart-card-head h3 { font-size: 13px; font-weight: 600; }
+.chart-card-head .chart-sub { font-size: 11px; color: var(--text-tertiary); margin-top: 2px; }
+.seg { display: flex; background: var(--seg-track); border-radius: 8px; padding: 2px; gap: 2px; flex-shrink: 0; }
+.seg button {
+  border: none; background: transparent; font-size: 11px; padding: 3px 8px;
+  border-radius: 6px; color: var(--text-secondary); white-space: nowrap;
+}
+.seg button:hover { color: var(--text-primary); }
+.seg button.active { background: var(--bg-surface); color: var(--text-primary); font-weight: 500; box-shadow: var(--shadow-card); }
+.chart-bar { fill: var(--primary); }
+.bar-name { font-size: 11px; fill: var(--text-secondary); font-family: var(--font-ui); }
+.bar-value { font-size: 11px; font-weight: 500; fill: var(--text-primary); font-family: var(--font-ui); font-variant-numeric: tabular-nums; }
+.chart-tip .r { display: flex; justify-content: space-between; gap: 14px; color: var(--text-secondary); }
+.chart-tip .r b { color: var(--text-primary); font-weight: 500; font-variant-numeric: tabular-nums; }
+@media (max-width: 900px) { .charts-grid { grid-template-columns: 1fr; } }
+
 /* ---- 弹窗宽版 + 趋势图 ---- */
 .modal-wide { width: min(680px, 100%); }
 .trend-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }

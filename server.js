@@ -304,6 +304,19 @@ app.post("/api/refresh", async (req, res) => {
   res.json({ stations: store.list().map(redact), refreshedAt: new Date().toISOString() });
 });
 
+// 总览图表用：全部站点的余额历史（只含时间与余额，前端聚合）
+app.get("/api/history/overview", (req, res) => {
+  const hours = Math.min(24 * 30, Math.max(1, Number(req.query.hours) || 24));
+  res.json({
+    hours,
+    series: store.list().map((s) => ({
+      id: s.id,
+      name: s.name,
+      points: history.points(s.id, hours).map((p) => [p[0], p[1]]),
+    })),
+  });
+});
+
 // 历史数据（趋势图用）
 app.get("/api/stations/:id/history", (req, res) => {
   const s = store.get(req.params.id);
