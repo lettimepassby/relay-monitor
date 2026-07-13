@@ -1,6 +1,7 @@
 import express from "express";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { readFile } from "node:fs/promises";
 
 import { Store } from "./lib/store.js";
 import { queryStation, STATION_TYPES } from "./lib/providers.js";
@@ -12,6 +13,13 @@ import { CHANNEL_TYPES, sendToChannel } from "./lib/notify.js";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 8787;
 const HOST = process.env.HOST || "127.0.0.1";
+
+// 版本信息：版本号来自 package.json，commit 由 Docker 构建时注入（APP_COMMIT）
+const pkg = JSON.parse(await readFile(join(__dirname, "package.json"), "utf8"));
+const APP_INFO = {
+  version: pkg.version,
+  commit: (process.env.APP_COMMIT || "").slice(0, 7) || null,
+};
 
 const store = new Store(join(__dirname, "data", "stations.json"));
 await store.load();
@@ -150,6 +158,7 @@ mock.get("/sub2api/:acc/api/v1/usage/dashboard/stats", (req, res) => {
       today_actual_cost: Number(todayCost.toFixed(4)),
       today_cost: Number((todayCost * 1.15).toFixed(4)),
       today_requests: Math.round(todayCost * 40),
+      today_tokens: Math.round(todayCost * 250000),
       total_actual_cost: Number(s.usedUsd.toFixed(4)),
     },
   });
@@ -277,6 +286,7 @@ app.get("/api/meta", (req, res) => {
     channelTypes: CHANNEL_TYPES,
     settings: store.settings,
     rules: store.rules,
+    app: APP_INFO,
   });
 });
 
@@ -417,6 +427,8 @@ function redact(s) {
     prediction: history.predict(s.id),
     todayUsed: fromSite ?? history.usedSince(s.id, midnight.getTime()),
     todayIsEstimate: fromSite == null,
+    todayTokens: s.balance?.todayTokens ?? null,
+    todayRequests: s.balance?.todayRequests ?? null,
   };
 }
 

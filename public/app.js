@@ -21,7 +21,7 @@ document.getElementById("themeToggle").onclick = () =>
 const state = {
   stations: [], settings: { refreshIntervalSec: 60, lowBalanceUsd: 5 },
   types: [], channelTypes: [], channels: [], rules: {},
-  view: "dashboard", user: null,
+  view: "dashboard", user: null, app: null,
   trendHours: 24, overview: null, // 总览趋势图的时间范围与数据缓存 {hours, series, at}
 };
 let autoTimer = null;
@@ -68,6 +68,13 @@ const api = {
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const usd = (n) => "$" + Number(n ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtTokens = (n) => {
+  n = Number(n) || 0;
+  if (n >= 1e9) return +(n / 1e9).toFixed(1) + "B";
+  if (n >= 1e6) return +(n / 1e6).toFixed(1) + "M";
+  if (n >= 1e3) return +(n / 1e3).toFixed(1) + "K";
+  return String(n);
+};
 const typeLabel = (v) => (state.types.find((t) => t.value === v)?.label || v);
 
 function threshold(s) {
@@ -180,6 +187,7 @@ function stationRow(s) {
   const pieces = [];
   if (b && b.ok && s.todayUsed != null) {
     pieces.push(`<span>今日消耗 ${s.todayIsEstimate ? "≈" : ""}${usd(s.todayUsed)}</span>`);
+    if (s.todayTokens != null) pieces.push(`<span>${fmtTokens(s.todayTokens)} tokens</span>`);
   }
   if (eta) pieces.push(`<span class="${eta.cls}">${eta.text}</span>`);
   if (pieces.length) pieces.push("<span>点击查看趋势</span>");
@@ -221,11 +229,19 @@ function renderDashboard() {
   const lowCount = list.filter((s) => ["warn", "danger"].includes(statusOf(s))).length;
   const errCount = list.filter((s) => statusOf(s) === "error").length;
 
+  // 今日 tokens / 请求数：只有 sub2api 站点能提供，有数据才显示
+  const tokList = list.filter((s) => s.todayTokens != null);
+  const reqList = list.filter((s) => s.todayRequests != null);
+  const subBits = [];
+  if (tokList.length) subBits.push(`${fmtTokens(tokList.reduce((a, s) => a + s.todayTokens, 0))} tokens`);
+  if (reqList.length) subBits.push(`${reqList.reduce((a, s) => a + s.todayRequests, 0).toLocaleString("en-US")} 次请求`);
+  const todaySub = subBits.length ? `<div class="stat-sub">${subBits.join(" · ")}</div>` : "";
+
   $("#headerActions").innerHTML = HDR_BTNS;
   const stats = `
   <div class="stats stats-5">
     <div class="stat-card"><div class="label">总剩余余额</div><div class="value">${usd(totalRemaining)}</div></div>
-    <div class="stat-card"><div class="label">今日总消耗</div><div class="value">${todayApprox ? "≈ " : ""}${usd(todayTotal)}</div></div>
+    <div class="stat-card"><div class="label">今日总消耗</div><div class="value">${todayApprox ? "≈ " : ""}${usd(todayTotal)}</div>${todaySub}</div>
     <div class="stat-card"><div class="label">日均消耗（估算）</div><div class="value">${totalBurn > 0 ? usd(totalBurn) : "—"}</div></div>
     <div class="stat-card"><div class="label">低余额 / 耗尽</div><div class="value ${lowCount ? "warn" : ""}">${lowCount}<small>个</small></div></div>
     <div class="stat-card"><div class="label">查询异常</div><div class="value ${errCount ? "danger" : ""}">${errCount}<small>个</small></div></div>
@@ -570,7 +586,7 @@ function renderSettings() {
   </div>
   <div class="section-head" style="margin-top:20px"><h2>关于</h2></div>
   <div class="panel"><div class="st-row"><div class="st-main" style="cursor:default">
-    <div class="st-name">中转站余额监控</div>
+    <div class="st-name">中转站余额监控${state.app ? ` <span class="demo-tag">v${esc(state.app.version)}${state.app.commit ? " · " + esc(state.app.commit) : ""}</span>` : ""}</div>
     <div class="st-meta">支持 New API（访问令牌 / sk 密钥）与 Sub2API（登录令牌 / 账号密码自动续期）。界面基于 app-shell-ui 设计语言构建。凭证仅存储于本机 data/ 目录。</div>
   </div></div></div>`;
 
@@ -609,7 +625,8 @@ function render() {
   else if (state.view === "stations") renderStations();
   else if (state.view === "notify") renderNotify();
   else renderSettings();
-  $("#lastSync").textContent = "自动刷新：每 " + state.settings.refreshIntervalSec + " 秒";
+  const ver = state.app ? `v${state.app.version}${state.app.commit ? ` (${state.app.commit})` : ""}` : "";
+  $("#lastSync").innerHTML = `自动刷新：每 ${state.settings.refreshIntervalSec} 秒${ver ? `<br>${esc(ver)}` : ""}`;
 }
 
 // ---- 中转站弹窗 --------------------------------------------------------------
@@ -768,7 +785,13 @@ async function openTrend(station) {
     const eta = etaText(prediction);
     $("#trendStats").innerHTML = `
       <div class="stat-card"><div class="label">当前余额</div><div class="value">${b?.ok ? usd(b.remaining) : "—"}</div></div>
-      <div class="stat-card"><div class="label">今日消耗</div><div class="value">${station.todayUsed != null ? (station.todayIsEstimate ? "≈ " : "") + usd(station.todayUsed) : "—"}</div></div>
+      <div class="stat-card"><div class="label">今日消耗</div><div class="value">${station.todayUsed != null ? (station.todayIsEstimate ? "≈ " : "") + usd(station.todayUsed) : "—"}</div>${
+        station.todayTokens != null || station.todayRequests != null
+          ? `<div class="stat-sub">${[
+              station.todayTokens != null ? fmtTokens(station.todayTokens) + " tokens" : null,
+              station.todayRequests != null ? station.todayRequests.toLocaleString("en-US") + " 次" : null,
+            ].filter(Boolean).join(" · ")}</div>` : ""
+      }</div>
       <div class="stat-card"><div class="label">日均消耗（估算）</div><div class="value">${prediction?.burnPerDay > 0 ? usd(prediction.burnPerDay) : "—"}</div></div>
       <div class="stat-card"><div class="label">预计耗尽</div><div class="value ${eta?.cls || ""}">${prediction?.etaDays != null ? fmtEtaText(prediction.etaDays) : "—"}</div></div>`;
     drawChart($("#trendChart"), points, prediction);
@@ -1041,6 +1064,7 @@ async function bootData() {
   state.channelTypes = meta.channelTypes;
   state.settings = meta.settings;
   state.rules = meta.rules;
+  state.app = meta.app || null;
   await Promise.all([reload(), loadNotifications()]);
   render();
   startAuto();

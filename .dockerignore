@@ -1,0 +1,9 @@
+node_modules
+data
+.git
+.github
+.claude
+.DS_Store
+Dockerfile
+docker-compose.yml
+deploy

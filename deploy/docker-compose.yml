@@ -1,0 +1,22 @@
+# 服务器部署：面板 + Watchtower 自动更新
+# 用法：mkdir -p ~/relay-monitor && cp docker-compose.yml ~/relay-monitor/ && cd ~/relay-monitor && docker compose up -d
+services:
+  relay-monitor:
+    image: ghcr.io/lettimepassby/relay-monitor:latest
+    container_name: relay-monitor
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    environment:
+      - HOST=0.0.0.0
+    volumes:
+      - ./data:/app/data
+
+  watchtower:
+    image: containrrr/watchtower
+    container_name: watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    # 每 5 分钟检查一次 relay-monitor 的新镜像，更新后清理旧镜像
+    command: --cleanup --interval 300 relay-monitor
