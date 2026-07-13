@@ -18,5 +18,8 @@ services:
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      # 新版 Docker 守护进程要求 API >= 1.40，watchtower 默认协商值过老
+      - DOCKER_API_VERSION=1.44
     # 每 5 分钟检查一次 relay-monitor 的新镜像，更新后清理旧镜像
     command: --cleanup --interval 300 relay-monitor

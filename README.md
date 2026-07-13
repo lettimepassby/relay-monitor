@@ -39,6 +39,27 @@ npm start          # 打开 http://127.0.0.1:8787，账号 admin / admin123
 自定义端口 / 监听地址：`PORT=9000 HOST=0.0.0.0 npm start`。
 对外暴露前请务必修改默认密码，并建议置于 HTTPS 反代之后。
 
+## Docker 部署（含 Watchtower 自动更新）
+
+镜像随 main 分支推送自动构建：`ghcr.io/lettimepassby/relay-monitor:latest`（另有 commit SHA 标签可回滚）。
+
+```bash
+mkdir -p ~/relay-monitor && cd ~/relay-monitor
+# 下载 deploy/docker-compose.yml 放到这里，然后：
+docker compose up -d
+```
+
+compose 里包含两个服务：
+
+- **relay-monitor**：面板本体，数据持久化在 `./data`（站点凭证 / 历史 / 会话密钥），升级不丢数据
+- **watchtower**：每 5 分钟检查一次镜像更新，发现新版本自动拉取并重启面板、清理旧镜像。
+  推送代码 → Actions 构建镜像 → 服务器几分钟内自动更新，页面「设置 → 关于」和侧栏可查看当前运行的版本与构建 commit
+
+> Watchtower 匿名拉取要求 GHCR 镜像包为 public：首次构建后到
+> `https://github.com/users/lettimepassby/packages/container/relay-monitor/settings`
+> 把 Danger Zone 里的可见性改为 Public（一次即可）；或者在服务器 `docker login ghcr.io` 使用带
+> `read:packages` 权限的 PAT。
+
 ## 添加真实中转站
 
 右上角「添加中转站」→ 选类型 → 填站点根地址（如 `https://your-relay.com`，不带 `/v1`）→ 按上表填凭证。
