@@ -141,8 +141,13 @@
           <input class="input" id="f-password" type="password" placeholder="站点的登录密码" />
         </div>
         <div class="form-field">
-          <label>低余额告警阈值（美元，可留空）</label>
+          <label>低余额告警阈值（按站点余额 $ 计，可留空）</label>
           <input class="input" id="f-lowBalance" placeholder="留空则用全局阈值" />
+        </div>
+        <div class="form-field">
+          <label>充值折算汇率（站点 $1 折合人民币 ¥）</label>
+          <input class="input" id="f-cnyRate" placeholder="如 2 表示 $1 = ¥2，留空按 1:1" />
+          <div class="hint">面板金额将按此汇率折算成人民币展示；余额告警仍按站点余额判断。</div>
         </div>
       </div>
       <div class="modal-foot">

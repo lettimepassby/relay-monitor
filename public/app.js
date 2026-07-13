@@ -70,6 +70,10 @@ const api = {
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const usd = (n) => "$" + Number(n ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const cny = (n) => "¥" + Number(n ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const cny4 = (n) => "¥" + Number(n ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+// 充值折算汇率：站点 $1 折合人民币；未配置按 1:1
+const rateOf = (s) => (s && s.cnyPerUsd != null && s.cnyPerUsd > 0 ? s.cnyPerUsd : 1);
 const fmtTokens = (n) => {
   n = Number(n) || 0;
   if (n >= 1e9) return +(n / 1e9).toFixed(1) + "B";
@@ -120,12 +124,12 @@ function fmtClock(ts) {
 function fmtEtaText(days) {
   return days >= 1 ? `${days} 天` : `${Math.max(1, Math.round(days * 24))} 小时`;
 }
-function etaText(p) {
+function etaText(p, rate = 1) {
   if (!p) return null;
   if (p.burnPerDay === 0) return { text: "近期无消耗", cls: "" };
   if (p.etaDays == null) return null;
   const cls = p.etaDays <= (state.rules.etaDays ?? 3) ? "danger" : p.etaDays <= 7 ? "warn" : "";
-  return { text: `≈ ${usd(p.burnPerDay)}/天 · 预计 ${fmtEtaText(p.etaDays)}后耗尽`, cls };
+  return { text: `≈ ${cny(p.burnPerDay * rate)}/天 · 预计 ${fmtEtaText(p.etaDays)}后耗尽`, cls };
 }
 
 // ---- 登录 -------------------------------------------------------------------
@@ -164,9 +168,10 @@ const CH_PLATE = { telegram: "TG", dingtalk: "DT", wecom: "WC", feishu: "FS", ba
 function stationRow(s) {
   const st = statusOf(s);
   const b = s.balance;
+  const rate = rateOf(s);
   const cls = st === "danger" || st === "error" ? "danger" : st === "warn" ? "warn" : "";
   const usedPct = b && b.ok && b.total > 0 ? Math.min(100, Math.round((b.used / b.total) * 100)) : 0;
-  const amount = b && b.ok ? usd(b.remaining) : "—";
+  const amount = b && b.ok ? cny(b.remaining * rate) : "—";
   let meta;
   if (b && b.ok) {
     const bits = [esc(typeLabel(s.type))];
@@ -183,12 +188,12 @@ function stationRow(s) {
     meta = `${esc(typeLabel(s.type))} · 尚未查询`;
   }
   const bar = b && b.ok
-    ? `<div class="st-bar"><div class="progress"><i class="${cls}" style="width:${usedPct}%"></i></div><span class="st-usage">已用 ${usd(b.used)} / ${usd(b.total)}</span></div>`
+    ? `<div class="st-bar"><div class="progress"><i class="${cls}" style="width:${usedPct}%"></i></div><span class="st-usage">已用 ${cny(b.used * rate)} / ${cny(b.total * rate)}</span></div>`
     : "";
-  const eta = etaText(s.prediction);
+  const eta = etaText(s.prediction, rate);
   const pieces = [];
   if (b && b.ok && s.todayUsed != null) {
-    pieces.push(`<span>今日消耗 ${s.todayIsEstimate ? "≈" : ""}${usd(s.todayUsed)}</span>`);
+    pieces.push(`<span>今日消耗 ${s.todayIsEstimate ? "≈" : ""}${cny(s.todayUsed * rate)}</span>`);
     if (s.todayTokens != null) pieces.push(`<span>${fmtTokens(s.todayTokens)} tokens</span>`);
   }
   if (eta) pieces.push(`<span class="${eta.cls}">${eta.text}</span>`);
@@ -205,7 +210,7 @@ function stationRow(s) {
     </div>
     <div class="st-balance">
       <div class="amt ${cls}">${amount}</div>
-      <div class="sub">剩余余额</div>
+      <div class="sub">${b && b.ok && rate !== 1 ? `站点余额 ${usd(b.remaining)}` : "剩余余额"}</div>
     </div>
     <div class="st-actions">
       <button class="icon-btn" data-act="refresh" title="刷新"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg></button>
@@ -222,10 +227,12 @@ const HDR_BTNS = `
 function renderDashboard() {
   const list = state.stations;
   const okList = list.filter((s) => s.balance?.ok);
+  const anyRate = list.some((s) => rateOf(s) !== 1);
   const totalRemaining = okList.reduce((a, s) => a + s.balance.remaining, 0);
-  const totalUsed = okList.reduce((a, s) => a + s.balance.used, 0);
-  const totalBurn = list.reduce((a, s) => a + (s.prediction?.burnPerDay || 0), 0);
-  const todayTotal = list.reduce((a, s) => a + (s.todayUsed || 0), 0);
+  const totalRemainingCny = okList.reduce((a, s) => a + s.balance.remaining * rateOf(s), 0);
+  const totalUsedCny = okList.reduce((a, s) => a + s.balance.used * rateOf(s), 0);
+  const totalBurnCny = list.reduce((a, s) => a + (s.prediction?.burnPerDay || 0) * rateOf(s), 0);
+  const todayTotalCny = list.reduce((a, s) => a + (s.todayUsed || 0) * rateOf(s), 0);
   // 任一站点的今日消耗是历史推算值时，合计也只能算约数
   const todayApprox = list.some((s) => (s.todayUsed || 0) > 0 && s.todayIsEstimate);
   const lowCount = list.filter((s) => ["warn", "danger"].includes(statusOf(s))).length;
@@ -242,9 +249,11 @@ function renderDashboard() {
   $("#headerActions").innerHTML = HDR_BTNS;
   const stats = `
   <div class="stats stats-5">
-    <div class="stat-card"><div class="label">总剩余余额</div><div class="value">${usd(totalRemaining)}</div></div>
-    <div class="stat-card"><div class="label">今日总消耗</div><div class="value">${todayApprox ? "≈ " : ""}${usd(todayTotal)}</div>${todaySub}</div>
-    <div class="stat-card"><div class="label">日均消耗（估算）</div><div class="value">${totalBurn > 0 ? usd(totalBurn) : "—"}</div></div>
+    <div class="stat-card"><div class="label">总剩余余额</div><div class="value">${cny(totalRemainingCny)}</div>${
+      anyRate ? `<div class="stat-sub">站点余额合计 ${usd(totalRemaining)}</div>` : ""
+    }</div>
+    <div class="stat-card"><div class="label">今日总消耗</div><div class="value">${todayApprox ? "≈ " : ""}${cny(todayTotalCny)}</div>${todaySub}</div>
+    <div class="stat-card"><div class="label">日均消耗（估算）</div><div class="value">${totalBurnCny > 0 ? cny(totalBurnCny) : "—"}</div></div>
     <div class="stat-card"><div class="label">低余额 / 耗尽</div><div class="value ${lowCount ? "warn" : ""}">${lowCount}<small>个</small></div></div>
     <div class="stat-card"><div class="label">查询异常</div><div class="value ${errCount ? "danger" : ""}">${errCount}<small>个</small></div></div>
   </div>`;
@@ -253,7 +262,7 @@ function renderDashboard() {
   <div class="charts-grid">
     <div class="panel chart-card">
       <div class="chart-card-head">
-        <div><h3>总余额趋势</h3><div class="chart-sub">全部中转站剩余余额合计</div></div>
+        <div><h3>总余额趋势</h3><div class="chart-sub">全部中转站剩余余额合计（按充值汇率折算 ¥）</div></div>
         <div class="seg" id="ovRange">${RANGES.map(([h, l]) =>
           `<button data-hours="${h}" class="${state.trendHours === h ? "active" : ""}">${l}</button>`).join("")}</div>
       </div>
@@ -261,13 +270,13 @@ function renderDashboard() {
     </div>
     <div class="panel chart-card">
       <div class="chart-card-head">
-        <div><h3>日均消耗对比</h3><div class="chart-sub">按近 48 小时消耗速度回归估算（$/天）</div></div>
+        <div><h3>日均消耗对比</h3><div class="chart-sub">按近 48 小时消耗速度回归估算（¥/天）</div></div>
       </div>
       <div class="chart-wrap" id="burnChart"></div>
     </div>
   </div>` : "";
   const body = list.length
-    ? `<div class="section-head"><h2>中转站余额</h2><span class="muted">共 ${list.length} 个 · 累计已用 ${usd(totalUsed)}</span></div>
+    ? `<div class="section-head"><h2>中转站余额</h2><span class="muted">共 ${list.length} 个 · 累计已用 ${cny(totalUsedCny)}</span></div>
        <div class="panel">${list.map(stationRow).join("")}</div>`
     : emptyState();
   $("#content").innerHTML = stats + charts + body;
@@ -296,9 +305,12 @@ async function mountOverviewChart() {
   }
 }
 
-// 聚合全部站点：时间并集 + 各站前向填充求和
+// 聚合全部站点：时间并集 + 各站前向填充求和（按各站充值汇率折算成 ¥）
 function drawTotalChart(wrap, ov) {
-  const seriesList = ov.series.filter((s) => s.points && s.points.length);
+  const rateMap = new Map(state.stations.map((s) => [s.id, rateOf(s)]));
+  const seriesList = ov.series
+    .filter((s) => s.points && s.points.length)
+    .map((s) => ({ ...s, rate: rateMap.get(s.id) ?? 1 }));
   const times = [];
   for (const s of seriesList) for (const p of s.points) times.push(p[0]);
   times.sort((a, b) => a - b);
@@ -316,7 +328,7 @@ function drawTotalChart(wrap, ov) {
     seriesList.forEach((s, i) => {
       while (idx[i] + 1 < s.points.length && s.points[idx[i] + 1][0] <= t) idx[i]++;
       if (idx[i] >= 0) {
-        const v = s.points[idx[i]][1];
+        const v = s.points[idx[i]][1] * s.rate;
         sum += v;
         bd.push([s.name, v]);
       }
@@ -338,7 +350,7 @@ function drawTotalChart(wrap, ov) {
   for (let i = 0; i * step <= yMax + 1e-9; i++) {
     const v = +(i * step).toFixed(6);
     grid += `<line class="chart-grid" x1="${L}" y1="${y(v)}" x2="${W - R}" y2="${y(v)}"/>`;
-    labels += `<text class="chart-axis-label" x="${L - 6}" y="${y(v) + 3}" text-anchor="end">$${v >= 100 ? Math.round(v).toLocaleString("en-US") : v}</text>`;
+    labels += `<text class="chart-axis-label" x="${L - 6}" y="${y(v) + 3}" text-anchor="end">¥${v >= 100 ? Math.round(v).toLocaleString("en-US") : v}</text>`;
   }
   for (const f of [0, 0.5, 1]) {
     const t = t0 + (t1 - t0) * f;
@@ -381,10 +393,10 @@ function drawTotalChart(wrap, ov) {
     const bd = [...breakdown[bi]].sort((a, b) => b[1] - a[1]);
     const shown = bd.slice(0, 5);
     const rest = bd.slice(5);
-    let rows = shown.map(([n, v]) => `<div class="r"><span>${esc(truncateLabel(n, 14))}</span><b>${usd(v)}</b></div>`).join("");
-    if (rest.length) rows += `<div class="r"><span>其他 ${rest.length} 个</span><b>${usd(rest.reduce((a, x) => a + x[1], 0))}</b></div>`;
+    let rows = shown.map(([n, v]) => `<div class="r"><span>${esc(truncateLabel(n, 14))}</span><b>${cny(v)}</b></div>`).join("");
+    if (rest.length) rows += `<div class="r"><span>其他 ${rest.length} 个</span><b>${cny(rest.reduce((a, x) => a + x[1], 0))}</b></div>`;
     tip.style.display = "block";
-    tip.innerHTML = `<div class="t">${fmtClock(pt)}</div><div class="v">合计 ${usd(pv)}</div>${rows}`;
+    tip.innerHTML = `<div class="t">${fmtClock(pt)}</div><div class="v">合计 ${cny(pv)}</div>${rows}`;
     const wrapRect = wrap.getBoundingClientRect();
     const tipX = (px / W) * wrapRect.width;
     tip.style.left = Math.min(Math.max(tipX + 12, 4), wrapRect.width - 150) + "px";
@@ -397,10 +409,10 @@ function drawTotalChart(wrap, ov) {
   });
 }
 
-// 各站日均消耗横向条形图：单一色相（对比的是数值不是身份），条端直接标数值
+// 各站日均消耗横向条形图：单一色相（对比的是数值不是身份），条端直接标数值（¥/天）
 function drawBurnBars(wrap, stations) {
   let items = stations
-    .map((s) => ({ name: s.name, burn: s.prediction?.burnPerDay || 0, eta: s.prediction?.etaDays ?? null }))
+    .map((s) => ({ name: s.name, burn: (s.prediction?.burnPerDay || 0) * rateOf(s), eta: s.prediction?.etaDays ?? null }))
     .filter((x) => x.burn > 0)
     .sort((a, b) => b.burn - a.burn);
   if (!items.length) {
@@ -424,7 +436,7 @@ function drawBurnBars(wrap, stations) {
     return `<g data-i="${i}">
       <text class="bar-name" x="${nameW - 8}" y="${yTop + 13}" text-anchor="end">${esc(truncateLabel(x.name, 12))}</text>
       <path class="chart-bar" d="${bar}"/>
-      <text class="bar-value" x="${nameW + w + 6}" y="${yTop + 13}">${usd(x.burn)}</text>
+      <text class="bar-value" x="${nameW + w + 6}" y="${yTop + 13}">${cny(x.burn)}</text>
       <rect class="bar-hit" data-i="${i}" x="0" y="${T + i * rowH}" width="${W}" height="${rowH}" fill="transparent"/>
     </g>`;
   }).join("");
@@ -437,7 +449,7 @@ function drawBurnBars(wrap, stations) {
     if (!hit) { tip.style.display = "none"; return; }
     const it = items[Number(hit.dataset.i)];
     tip.style.display = "block";
-    tip.innerHTML = `<div class="t">${esc(it.name)}</div><div class="v">${usd(it.burn)}/天</div>` +
+    tip.innerHTML = `<div class="t">${esc(it.name)}</div><div class="v">${cny(it.burn)}/天</div>` +
       (it.eta != null ? `<div class="t">预计 ${it.eta} 天后耗尽</div>` : "");
     const wrapRect = wrap.getBoundingClientRect();
     tip.style.left = Math.min(e.clientX - wrapRect.left + 14, wrapRect.width - 150) + "px";
@@ -550,8 +562,6 @@ function etaRuleDisplay(r) {
 
 // ---- 用量统计页 ----------------------------------------------------------------
 const USAGE_RANGES = [["today", "今天"], ["24h", "近 24 小时"], ["7d", "近 7 天"], ["30d", "近 30 天"]];
-// 消耗金额显示到 4 位小数，与 sub2api 站点精度一致
-const usd4 = (n) => "$" + Number(n ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 });
 
 function renderUsage() {
   $("#headerActions").innerHTML = `
@@ -596,13 +606,16 @@ function renderUsageBody() {
   const okSts = sts.filter((s) => s.ok);
   const errSts = sts.filter((s) => !s.ok);
 
-  // 跨站点汇总：按模型名合并
+  // 跨站点汇总：按模型名合并（消耗按各站充值汇率折算成 ¥）
   const mmap = new Map();
-  for (const s of okSts) for (const m of s.models || []) {
-    const acc = mmap.get(m.model) || { model: m.model, tokens: 0, cost: 0, requests: 0, inputTokens: 0, outputTokens: 0, hasIO: false };
-    acc.tokens += m.tokens || 0; acc.cost += m.cost || 0; acc.requests += m.requests || 0;
-    if (m.inputTokens != null) { acc.inputTokens += m.inputTokens || 0; acc.outputTokens += m.outputTokens || 0; acc.hasIO = true; }
-    mmap.set(m.model, acc);
+  for (const s of okSts) {
+    const rate = rateOf(s);
+    for (const m of s.models || []) {
+      const acc = mmap.get(m.model) || { model: m.model, tokens: 0, cost: 0, requests: 0, inputTokens: 0, outputTokens: 0, hasIO: false };
+      acc.tokens += m.tokens || 0; acc.cost += (m.cost || 0) * rate; acc.requests += m.requests || 0;
+      if (m.inputTokens != null) { acc.inputTokens += m.inputTokens || 0; acc.outputTokens += m.outputTokens || 0; acc.hasIO = true; }
+      mmap.set(m.model, acc);
+    }
   }
   const models = [...mmap.values()].sort((a, b) => b.tokens - a.tokens);
 
@@ -625,12 +638,15 @@ function renderUsageBody() {
       ? hh : `${d.getMonth() + 1}/${d.getDate()} ${hh}`;
   };
   const bmap = new Map();
-  for (const s of okSts) for (const p of s.trend || []) {
-    const k = bucketKey(p);
-    const acc = bmap.get(k) || { label: bucketLabel(p), t: p.t ?? Infinity, tokens: 0, cost: 0, requests: 0 };
-    acc.tokens += p.tokens || 0; acc.cost += p.cost || 0; acc.requests += p.requests || 0;
-    acc.t = Math.min(acc.t, p.t ?? Infinity);
-    bmap.set(k, acc);
+  for (const s of okSts) {
+    const rate = rateOf(s);
+    for (const p of s.trend || []) {
+      const k = bucketKey(p);
+      const acc = bmap.get(k) || { label: bucketLabel(p), t: p.t ?? Infinity, tokens: 0, cost: 0, requests: 0 };
+      acc.tokens += p.tokens || 0; acc.cost += (p.cost || 0) * rate; acc.requests += p.requests || 0;
+      acc.t = Math.min(acc.t, p.t ?? Infinity);
+      bmap.set(k, acc);
+    }
   }
   const buckets = [...bmap.values()].sort((a, b) => a.t - b.t);
 
@@ -639,7 +655,7 @@ function renderUsageBody() {
   let totTokens, totCost, totReqs;
   if (data.range === "today") {
     totTokens = okSts.reduce((a, s) => a + (s.summary?.tokens ?? (s.models || []).reduce((x, m) => x + m.tokens, 0)), 0);
-    totCost = okSts.reduce((a, s) => a + (s.summary?.cost ?? (s.models || []).reduce((x, m) => x + m.cost, 0)), 0);
+    totCost = okSts.reduce((a, s) => a + (s.summary?.cost ?? (s.models || []).reduce((x, m) => x + m.cost, 0)) * rateOf(s), 0);
     totReqs = okSts.reduce((a, s) => a + (s.summary?.requests ?? (s.models || []).reduce((x, m) => x + m.requests, 0)), 0);
   } else {
     const src = data.range === "24h" ? buckets : models;
@@ -652,7 +668,7 @@ function renderUsageBody() {
   el.innerHTML = `
     <div class="stats">
       <div class="stat-card"><div class="label">总 Tokens</div><div class="value" title="${totTokens.toLocaleString("en-US")}">${fmtTokens(totTokens)}</div></div>
-      <div class="stat-card"><div class="label">实际消耗</div><div class="value">${usd4(totCost)}</div></div>
+      <div class="stat-card"><div class="label">实际消耗</div><div class="value">${cny4(totCost)}</div></div>
       <div class="stat-card"><div class="label">请求数</div><div class="value">${totReqs.toLocaleString("en-US")}</div></div>
       <div class="stat-card"><div class="label">数据来源</div><div class="value">${okSts.length}<small>/ ${sts.length} 个站点</small></div></div>
     </div>
@@ -681,7 +697,7 @@ function renderUsageBody() {
             <td>${m.hasIO ? m.inputTokens.toLocaleString("en-US") : "—"}</td>
             <td>${m.hasIO ? m.outputTokens.toLocaleString("en-US") : "—"}</td>
             <td>${m.tokens.toLocaleString("en-US")}</td>
-            <td>${usd4(m.cost)}</td>
+            <td>${cny4(m.cost)}</td>
           </tr>`).join("") || '<tr><td colspan="6" class="u-empty">该范围内暂无用量数据</td></tr>'}
         </tbody>
       </table>
@@ -731,7 +747,7 @@ function drawUsageTrend(wrap, buckets) {
   attachUsageTip(wrap, (i) => {
     const b = buckets[i];
     return `<div class="t">${esc(b.label)}</div><div class="v">${b.tokens.toLocaleString("en-US")} tokens</div>` +
-      `<div class="r"><span>消耗</span><b>${usd4(b.cost)}</b></div><div class="r"><span>请求</span><b>${b.requests.toLocaleString("en-US")}</b></div>`;
+      `<div class="r"><span>消耗</span><b>${cny4(b.cost)}</b></div><div class="r"><span>请求</span><b>${b.requests.toLocaleString("en-US")}</b></div>`;
   });
 }
 
@@ -772,7 +788,7 @@ function drawUsageModels(wrap, models) {
   attachUsageTip(wrap, (i) => {
     const m = items[i];
     return `<div class="t">${esc(m.model)}</div><div class="v">${m.tokens.toLocaleString("en-US")} tokens</div>` +
-      `<div class="r"><span>消耗</span><b>${usd4(m.cost)}</b></div><div class="r"><span>请求</span><b>${m.requests.toLocaleString("en-US")}</b></div>`;
+      `<div class="r"><span>消耗</span><b>${cny4(m.cost)}</b></div><div class="r"><span>请求</span><b>${m.requests.toLocaleString("en-US")}</b></div>`;
   });
 }
 
@@ -893,6 +909,7 @@ function openModal(station) {
   $("#f-email").value = station?.email || "";
   $("#f-password").value = "";
   $("#f-lowBalance").value = station?.lowBalanceUsd ?? "";
+  $("#f-cnyRate").value = station?.cnyPerUsd ?? "";
   if (station) {
     $("#f-accessToken").placeholder = station.hasAccessToken ? "已配置，留空保持不变" : "令牌 / JWT";
     $("#f-apiKey").placeholder = station.hasApiKey ? "已配置，留空保持不变" : "sk-...";
@@ -933,6 +950,7 @@ $("#modalSave").onclick = async () => {
     userId: $("#f-userId").value.trim(),
     email: $("#f-email").value.trim(),
     lowBalanceUsd: $("#f-lowBalance").value.trim(),
+    cnyPerUsd: $("#f-cnyRate").value.trim(),
   };
   const at = $("#f-accessToken").value.trim();
   const ak = $("#f-apiKey").value.trim();
@@ -1030,19 +1048,24 @@ async function openTrend(station) {
     const { points, prediction } = await api.historyOf(station.id, 72);
     if (seq !== trendSeq) return;
     const b = station.balance;
-    const eta = etaText(prediction);
+    const rate = rateOf(station);
+    const eta = etaText(prediction, rate);
     $("#trendStats").innerHTML = `
-      <div class="stat-card"><div class="label">当前余额</div><div class="value">${b?.ok ? usd(b.remaining) : "—"}</div></div>
-      <div class="stat-card"><div class="label">今日消耗</div><div class="value">${station.todayUsed != null ? (station.todayIsEstimate ? "≈ " : "") + usd(station.todayUsed) : "—"}</div>${
+      <div class="stat-card"><div class="label">当前余额</div><div class="value">${b?.ok ? cny(b.remaining * rate) : "—"}</div>${
+        b?.ok && rate !== 1 ? `<div class="stat-sub">站点余额 ${usd(b.remaining)}</div>` : ""
+      }</div>
+      <div class="stat-card"><div class="label">今日消耗</div><div class="value">${station.todayUsed != null ? (station.todayIsEstimate ? "≈ " : "") + cny(station.todayUsed * rate) : "—"}</div>${
         station.todayTokens != null || station.todayRequests != null
           ? `<div class="stat-sub">${[
               station.todayTokens != null ? fmtTokens(station.todayTokens) + " tokens" : null,
               station.todayRequests != null ? station.todayRequests.toLocaleString("en-US") + " 次" : null,
             ].filter(Boolean).join(" · ")}</div>` : ""
       }</div>
-      <div class="stat-card"><div class="label">日均消耗（估算）</div><div class="value">${prediction?.burnPerDay > 0 ? usd(prediction.burnPerDay) : "—"}</div></div>
+      <div class="stat-card"><div class="label">日均消耗（估算）</div><div class="value">${prediction?.burnPerDay > 0 ? cny(prediction.burnPerDay * rate) : "—"}</div></div>
       <div class="stat-card"><div class="label">预计耗尽</div><div class="value ${eta?.cls || ""}">${prediction?.etaDays != null ? fmtEtaText(prediction.etaDays) : "—"}</div></div>`;
-    drawChart($("#trendChart"), points, prediction);
+    // 图表纵轴按充值汇率折算成 ¥（耗尽时间等预测不受影响）
+    drawChart($("#trendChart"), points.map((p) => [p[0], p[1] * rate]),
+      prediction ? { ...prediction, burnPerDay: prediction.burnPerDay * rate } : prediction);
   } catch (e) {
     if (seq !== trendSeq) return;
     $("#trendChart").innerHTML = `<div class="chart-empty">${esc(e.message)}</div>`;
@@ -1092,9 +1115,9 @@ function drawChart(wrap, points, prediction) {
 
   let grid = "", labels = "";
   for (let i = 0; i * step <= yMax + 1e-9; i++) {
-    const v = +(i * step).toFixed(6); // 消除浮点累加误差，避免 $0.30000000000000004 这类刻度
+    const v = +(i * step).toFixed(6); // 消除浮点累加误差，避免 ¥0.30000000000000004 这类刻度
     grid += `<line class="chart-grid" x1="${L}" y1="${y(v)}" x2="${W - R}" y2="${y(v)}"/>`;
-    labels += `<text class="chart-axis-label" x="${L - 6}" y="${y(v) + 3}" text-anchor="end">$${v >= 100 ? Math.round(v) : v}</text>`;
+    labels += `<text class="chart-axis-label" x="${L - 6}" y="${y(v) + 3}" text-anchor="end">¥${v >= 100 ? Math.round(v) : v}</text>`;
   }
   // x 轴 3 个刻度
   for (const f of [0, 0.5, 1]) {
@@ -1144,7 +1167,7 @@ function drawChart(wrap, points, prediction) {
     dot.setAttribute("cx", px); dot.setAttribute("cy", py);
     dot.setAttribute("visibility", "visible");
     tip.style.display = "block";
-    tip.innerHTML = `<div class="t">${fmtClock(best[0])}</div><div class="v">${usd(best[1])}</div>`;
+    tip.innerHTML = `<div class="t">${fmtClock(best[0])}</div><div class="v">${cny(best[1])}</div>`;
     const wrapRect = wrap.getBoundingClientRect();
     const tipX = (px / W) * wrapRect.width;
     tip.style.left = Math.min(Math.max(tipX + 10, 4), wrapRect.width - 110) + "px";
