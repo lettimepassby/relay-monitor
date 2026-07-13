@@ -4,7 +4,11 @@ import { dirname, join } from "node:path";
 import { readFile } from "node:fs/promises";
 
 import { Store } from "./lib/store.js";
-import { queryStation, queryStationUsage, STATION_TYPES } from "./lib/providers.js";
+import {
+  queryStation, queryStationUsage, queryOwnData,
+  dateStrInTz, parseDateLabel, STATION_TYPES,
+} from "./lib/providers.js";
+import { forecastDaily } from "./lib/forecast.js";
 import { SessionManager, verifyPassword } from "./lib/auth.js";
 import { History } from "./lib/history.js";
 import { evaluateStation } from "./lib/alerts.js";
@@ -144,6 +148,41 @@ mock.get("/sub2api/:acc/api/v1/auth/me", (req, res) => {
     });
   }
 });
+// 管理员数据看板（与真实 new-api 的 /api/data/、/api/data/users 契约一致），
+// 生成确定性的演示数据：白天高、周末低、多模型/多用户权重
+function mockOwnRows(startSec, endSec, kind) {
+  const models = [["claude-sonnet-4-5", 5], ["gpt-4o", 3], ["deepseek-v3", 1.5], ["gemini-2.5-pro", 0.8]];
+  const users = [["alice", 4], ["bob", 2.5], ["carol", 1.2], ["dave", 0.6]];
+  const list = kind === "user" ? users : models;
+  const rows = [];
+  const HOUR = 3600;
+  for (let t = Math.ceil(startSec / HOUR) * HOUR; t <= endSec; t += HOUR) {
+    const hod = Math.floor(t / HOUR) % 24;
+    const dow = Math.floor(t / 86400 + 4) % 7; // epoch 是周四
+    const rhythm = (0.35 + Math.max(0, Math.sin(((hod - 3) / 24) * 2 * Math.PI))) * (dow === 0 || dow === 6 ? 0.55 : 1);
+    for (const [name, w] of list) {
+      const noise = ((t * 2654435761 + name.length * 2246822519) >>> 16) % 1000 / 1000; // 确定性噪声
+      const usd = w * rhythm * (0.5 + noise) * 0.03;
+      rows.push({
+        [kind === "user" ? "username" : "model_name"]: name,
+        created_at: t,
+        count: Math.max(1, Math.round(usd * 40)),
+        quota: Math.round(usd * QUOTA_PER_UNIT),
+        token_used: Math.round(usd * 250000),
+      });
+    }
+  }
+  return rows;
+}
+mock.get("/newapi/:acc/api/data/", (req, res) => {
+  if (!needAuth(req, res)) return;
+  res.json({ success: true, message: "", data: mockOwnRows(Number(req.query.start_timestamp) || 0, Number(req.query.end_timestamp) || 0, "model") });
+});
+mock.get("/newapi/:acc/api/data/users", (req, res) => {
+  if (!needAuth(req, res)) return;
+  res.json({ success: true, message: "", data: mockOwnRows(Number(req.query.start_timestamp) || 0, Number(req.query.end_timestamp) || 0, "user") });
+});
+
 // 用户仪表盘统计（与真实 Sub2API 的 /usage/dashboard/stats 契约一致）
 mock.get("/sub2api/:acc/api/v1/usage/dashboard/stats", (req, res) => {
   if (!needAuth(req, res)) return;
@@ -408,6 +447,94 @@ app.get("/api/usage", async (req, res) => {
   const payload = { range, granularity, startMs, endMs, tz, stations, generatedAt: new Date().toISOString() };
   usageCache.set(cacheKey, { at: Date.now(), payload });
   res.json(payload);
+});
+
+// ---- 「我的站点」下游分析（分时段 / 分模型 / 分用户 + 消费预测）------------------
+const ownCache = new Map();
+app.get("/api/own/analytics", async (req, res) => {
+  const own = store.list().find((s) => s.isOwn && s.type === "newapi");
+  if (!own) {
+    return res.status(400).json({
+      error: "还没有标记「我的中转站」：添加/编辑你的 New API 站点，勾选「这是我自己的中转站」（需管理员令牌）",
+    });
+  }
+  const range = ["today", "7d", "30d"].includes(req.query.range) ? req.query.range : "7d";
+  let tz = String(req.query.tz || "");
+  try { new Intl.DateTimeFormat("en-US", { timeZone: tz }); } catch { tz = ""; }
+  if (!tz) tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+  const cacheKey = `${range}|${tz}`;
+  const hit = ownCache.get(cacheKey);
+  if (hit && Date.now() - hit.at < 120000) return res.json(hit.payload);
+
+  const now = Date.now();
+  const p = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz, hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit",
+  }).formatToParts(new Date(now));
+  const get = (k) => Number(p.find((x) => x.type === k).value);
+  const midnight = now - ((get("hour") % 24) * 3600 + get("minute") * 60 + get("second")) * 1000 - (now % 1000);
+  const days = range === "30d" ? 29 : range === "7d" ? 6 : 0;
+  const startMs = midnight - days * 86400000;
+  const wideStart = midnight - 34 * 86400000; // 预测需要更长的历史
+
+  try {
+    // 模型行一次拉 35 天（窗口展示 + 日消费预测共用）；用户行只拉展示窗口
+    const [modelRows, userRows] = await Promise.all([
+      queryOwnData(own, wideStart, now, "model"),
+      queryOwnData(own, startMs, now, "user"),
+    ]);
+
+    const winModel = modelRows.filter((r) => r.t >= startMs);
+    const aggBy = (rows, field) => {
+      const m = new Map();
+      for (const r of rows) {
+        const acc = m.get(r.key) || { [field]: r.key, tokens: 0, cost: 0, requests: 0 };
+        acc.tokens += r.tokens; acc.cost += r.cost; acc.requests += r.requests;
+        m.set(r.key, acc);
+      }
+      return [...m.values()].sort((a, b) => b.cost - a.cost);
+    };
+
+    // 时段趋势：今天按小时，7/30 天按 tz 自然日
+    const hourly = range === "today";
+    const tmap = new Map();
+    for (const r of winModel) {
+      const key = hourly ? Math.floor(r.t / 3600000) * 3600000 : parseDateLabel(dateStrInTz(r.t, tz), tz);
+      const acc = tmap.get(key) || { t: key, tokens: 0, cost: 0, requests: 0 };
+      acc.tokens += r.tokens; acc.cost += r.cost; acc.requests += r.requests;
+      tmap.set(key, acc);
+    }
+
+    // 预测底料：35 天完整日消费（缺日补 0，不含今天的不完整数据）
+    const dmap = new Map();
+    for (const r of modelRows) {
+      if (r.t >= midnight) continue;
+      const dt = parseDateLabel(dateStrInTz(r.t, tz), tz);
+      dmap.set(dt, (dmap.get(dt) || 0) + r.cost);
+    }
+    const daily = [];
+    if (dmap.size) {
+      const firstDay = Math.min(...dmap.keys());
+      for (let t = firstDay; t < midnight; t += 86400000) {
+        daily.push({ t, cost: Math.round((dmap.get(t) || 0) * 10000) / 10000 });
+      }
+    }
+    const byUser = aggBy(userRows, "user");
+    const payload = {
+      range, tz, startMs, endMs: now,
+      station: { id: own.id, name: own.name, cnyPerUsd: own.cnyPerUsd ?? null },
+      byModel: aggBy(winModel, "model"),
+      byUser,
+      trend: [...tmap.values()].sort((a, b) => a.t - b.t),
+      daily: daily.slice(-14),
+      forecast: forecastDaily(daily, 7),
+      generatedAt: new Date().toISOString(),
+    };
+    ownCache.set(cacheKey, { at: Date.now(), payload });
+    res.json(payload);
+  } catch (err) {
+    res.status(502).json({ error: err?.message || String(err) });
+  }
 });
 
 // ---- 通知渠道 ----------------------------------------------------------------

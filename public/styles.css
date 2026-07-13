@@ -315,6 +315,19 @@ button { font-family: inherit; cursor: pointer; }
 .u-table td.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 .u-table td.u-empty { text-align: center; color: var(--text-tertiary); padding: 28px; }
 
+/* ---- 我的站点：预测图与勾选框 ---- */
+.chk-line { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-primary); cursor: pointer; }
+.chk-line input { width: 15px; height: 15px; accent-color: var(--primary); }
+.fc-band { fill: var(--primary); opacity: .10; }
+.fc-legend {
+  display: flex; gap: 16px; margin-top: 6px; font-size: 11px; color: var(--text-tertiary);
+  align-items: center; flex-wrap: wrap;
+}
+.fc-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.fc-legend i { display: inline-block; width: 16px; height: 0; border-top: 2px solid var(--primary); }
+.fc-legend .fc-dash { border-top-style: dashed; opacity: .7; }
+.fc-legend .fc-wash { height: 8px; border: none; background: var(--primary); opacity: .12; border-radius: 2px; }
+
 /* ---- 弹窗宽版 + 趋势图 ---- */
 .modal-wide { width: min(680px, 100%); }
 .trend-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }

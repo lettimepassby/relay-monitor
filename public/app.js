@@ -24,6 +24,7 @@ const state = {
   view: "dashboard", user: null, app: null,
   trendHours: 24, overview: null, // 总览趋势图的时间范围与数据缓存 {hours, series, at}
   usageRange: "today", usageStation: "all", usageData: null, // 用量统计页
+  ownRange: "7d", ownData: null, // 我的站点分析页
 };
 let autoTimer = null;
 
@@ -54,6 +55,7 @@ const api = {
   historyOf: (id, hours) => call(`/api/stations/${id}/history?hours=${hours}`),
   overview: (hours) => call(`/api/history/overview?hours=${hours}`),
   usage: (range) => call(`/api/usage?range=${range}&tz=${encodeURIComponent(Intl.DateTimeFormat().resolvedOptions().timeZone)}`),
+  ownAnalytics: (range) => call(`/api/own/analytics?range=${range}&tz=${encodeURIComponent(Intl.DateTimeFormat().resolvedOptions().timeZone)}`),
   saveSettings: (b) => call("/api/settings", { method: "PUT", body: b }),
   notifications: () => call("/api/notifications"),
   addChannel: (b) => call("/api/notifications/channels", { body: b }),
@@ -827,6 +829,235 @@ function attachUsageTip(wrap, contentOf) {
   svg.addEventListener("mouseleave", () => { tip.style.display = "none"; });
 }
 
+// ---- 我的站点：下游用量分析 + 消费预测 -------------------------------------------
+const OWN_RANGES = [["today", "今天"], ["7d", "近 7 天"], ["30d", "近 30 天"]];
+
+function renderOwn() {
+  $("#headerActions").innerHTML = `
+    <button class="btn btn-ghost" id="ownRefresh"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>刷新</button>`;
+  $("#content").innerHTML = `
+    <div class="usage-filters">
+      <div class="seg" id="ownRange">${OWN_RANGES.map(([v, l]) =>
+        `<button data-range="${v}" class="${state.ownRange === v ? "active" : ""}">${l}</button>`).join("")}</div>
+      <span class="muted" id="ownStationName"></span>
+    </div>
+    <div id="ownBody"><div class="chart-empty">加载中…</div></div>`;
+  loadOwn();
+}
+
+async function loadOwn(force) {
+  const range = state.ownRange;
+  const cached = state.ownData;
+  if (!force && cached && cached.range === range && Date.now() - cached.at < 60000) {
+    renderOwnBody();
+    return;
+  }
+  try {
+    const r = await api.ownAnalytics(range);
+    state.ownData = { ...r, at: Date.now() };
+    if (state.view === "own" && state.ownRange === range) renderOwnBody();
+  } catch (e) {
+    if (e instanceof AuthError) return;
+    const el = $("#ownBody");
+    if (el) el.innerHTML = `<div class="empty" style="padding:44px 20px">
+      <h3>无法加载下游数据</h3><p>${esc(e.message)}</p></div>`;
+  }
+}
+
+function renderOwnBody() {
+  const el = $("#ownBody");
+  if (!el || !state.ownData) return;
+  const d = state.ownData;
+  const rate = rateOf(d.station);
+  const nameEl = $("#ownStationName");
+  if (nameEl) nameEl.textContent = `数据来源：${d.station.name}`;
+
+  const totCost = d.byModel.reduce((a, m) => a + m.cost, 0) * rate;
+  const totTokens = d.byModel.reduce((a, m) => a + m.tokens, 0);
+  const totReqs = d.byModel.reduce((a, m) => a + m.requests, 0);
+  const hourly = d.range === "today";
+
+  const buckets = d.trend.map((p) => {
+    const dt = new Date(p.t);
+    return {
+      ...p,
+      cost: p.cost * rate,
+      label: hourly ? `${String(dt.getHours()).padStart(2, "0")}:00` : `${dt.getMonth() + 1}/${dt.getDate()}`,
+    };
+  });
+  const models = d.byModel.map((m) => ({ ...m, cost: m.cost * rate, hasIO: false }));
+  const users = d.byUser.map((u) => ({ ...u, cost: u.cost * rate }));
+
+  const fc = d.forecast;
+  const fcSub = fc
+    ? `未来 7 天预计 ${cny(fc.nextTotal * rate)}（区间 ${cny(fc.points.reduce((a, p) => a + p.lo, 0) * rate)} ~ ${cny(fc.points.reduce((a, p) => a + p.hi, 0) * rate)}）· ${fc.method} · 基于 ${fc.sampleDays} 天`
+    : "历史数据不足 3 天，暂无法预测";
+
+  el.innerHTML = `
+    <div class="stats">
+      <div class="stat-card"><div class="label">期内消费</div><div class="value">${cny4(totCost)}</div></div>
+      <div class="stat-card"><div class="label">Tokens</div><div class="value" title="${totTokens.toLocaleString("en-US")}">${fmtTokens(totTokens)}</div></div>
+      <div class="stat-card"><div class="label">请求数</div><div class="value">${totReqs.toLocaleString("en-US")}</div></div>
+      <div class="stat-card"><div class="label">活跃用户</div><div class="value">${users.length}<small>个</small></div></div>
+    </div>
+    <div class="charts-grid">
+      <div class="panel chart-card">
+        <div class="chart-card-head"><div><h3>用量趋势</h3><div class="chart-sub">${hourly ? "按小时" : "按天"}汇总（tokens）</div></div></div>
+        <div class="chart-wrap" id="ownTrendChart"></div>
+      </div>
+      <div class="panel chart-card">
+        <div class="chart-card-head"><div><h3>分模型 Token</h3><div class="chart-sub">按用量降序，最多 10 项</div></div></div>
+        <div class="chart-wrap" id="ownModelChart"></div>
+      </div>
+    </div>
+    <div class="charts-grid">
+      <div class="panel chart-card">
+        <div class="chart-card-head"><div><h3>消费预测</h3><div class="chart-sub">${esc(fcSub)}</div></div></div>
+        <div class="chart-wrap" id="ownForecastChart"></div>
+      </div>
+      <div class="panel chart-card">
+        <div class="chart-card-head"><div><h3>分用户消费</h3><div class="chart-sub">期内消费降序，最多 10 项（¥）</div></div></div>
+        <div class="chart-wrap" id="ownUserChart"></div>
+      </div>
+    </div>
+    <div class="section-head"><h2>用户明细</h2><span class="muted">共 ${users.length} 个用户</span></div>
+    <div class="panel u-table-wrap">
+      <table class="u-table">
+        <thead><tr><th>用户</th><th>请求数</th><th>Tokens</th><th>消费</th><th>占比</th></tr></thead>
+        <tbody>${users.map((u) => `<tr>
+          <td class="mono">${esc(u.user)}</td>
+          <td>${u.requests.toLocaleString("en-US")}</td>
+          <td>${u.tokens.toLocaleString("en-US")}</td>
+          <td>${cny4(u.cost)}</td>
+          <td>${totCost > 0 ? (u.cost / totCost * 100).toFixed(1) + "%" : "—"}</td>
+        </tr>`).join("") || '<tr><td colspan="5" class="u-empty">该范围内暂无数据</td></tr>'}</tbody>
+      </table>
+    </div>
+    <div class="section-head" style="margin-top:16px"><h2>模型明细</h2><span class="muted">共 ${models.length} 个模型</span></div>
+    <div class="panel u-table-wrap">
+      <table class="u-table">
+        <thead><tr><th>模型</th><th>请求数</th><th>Tokens</th><th>消费</th><th>占比</th></tr></thead>
+        <tbody>${models.map((m) => `<tr>
+          <td class="mono">${esc(m.model)}</td>
+          <td>${m.requests.toLocaleString("en-US")}</td>
+          <td>${m.tokens.toLocaleString("en-US")}</td>
+          <td>${cny4(m.cost)}</td>
+          <td>${totCost > 0 ? (m.cost / totCost * 100).toFixed(1) + "%" : "—"}</td>
+        </tr>`).join("") || '<tr><td colspan="5" class="u-empty">该范围内暂无数据</td></tr>'}</tbody>
+      </table>
+    </div>`;
+
+  drawUsageTrend($("#ownTrendChart"), buckets);
+  drawUsageModels($("#ownModelChart"), models);
+  drawOwnUsers($("#ownUserChart"), users);
+  drawForecast($("#ownForecastChart"), d.daily.map((x) => ({ t: x.t, cost: x.cost * rate })),
+    fc ? fc.points.map((p) => ({ ...p, cost: p.cost * rate, lo: p.lo * rate, hi: p.hi * rate })) : null);
+}
+
+// 分用户消费横向条形图（¥）
+function drawOwnUsers(wrap, users) {
+  if (!users.length) {
+    wrap.innerHTML = '<div class="chart-empty">该范围内暂无数据</div>';
+    return;
+  }
+  let items = users;
+  if (items.length > 10) {
+    const rest = items.slice(9);
+    items = items.slice(0, 9);
+    items.push({
+      user: `其他 ${rest.length} 个`,
+      cost: rest.reduce((a, x) => a + x.cost, 0),
+      tokens: rest.reduce((a, x) => a + x.tokens, 0),
+      requests: rest.reduce((a, x) => a + x.requests, 0),
+    });
+  }
+  const W = 380, rowH = 30, T = 6, B = 6, nameW = 110, valW = 62;
+  const barMax = W - nameW - valW - 12;
+  const H = T + items.length * rowH + B;
+  const max = Math.max(...items.map((x) => x.cost), 1e-9);
+  const rows = items.map((x, i) => {
+    const yTop = T + i * rowH + (rowH - 16) / 2;
+    const w = Math.max(2, (x.cost / max) * barMax);
+    const r = Math.min(4, w / 2);
+    const bar = `M${nameW},${yTop} h${(w - r).toFixed(1)} a${r},${r} 0 0 1 ${r},${r} v${16 - 2 * r} a${r},${r} 0 0 1 -${r},${r} h-${(w - r).toFixed(1)} z`;
+    return `<g>
+      <text class="bar-name" x="${nameW - 8}" y="${yTop + 12}" text-anchor="end">${esc(truncateLabel(x.user, 14))}</text>
+      <path class="chart-bar" d="${bar}"/>
+      <text class="bar-value" x="${nameW + w + 6}" y="${yTop + 12}">${cny(x.cost)}</text>
+      <rect class="u-hit" data-i="${i}" x="0" y="${T + i * rowH}" width="${W}" height="${rowH}" fill="transparent"/>
+    </g>`;
+  }).join("");
+  wrap.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="分用户消费">${rows}</svg><div class="chart-tip"></div>`;
+  attachUsageTip(wrap, (i) => {
+    const u = items[i];
+    return `<div class="t">${esc(u.user)}</div><div class="v">${cny4(u.cost)}</div>` +
+      `<div class="r"><span>Tokens</span><b>${fmtTokens(u.tokens)}</b></div><div class="r"><span>请求</span><b>${u.requests.toLocaleString("en-US")}</b></div>`;
+  });
+}
+
+// 日消费历史（实线）+ 未来预测（虚线 + 置信带）
+function drawForecast(wrap, daily, points) {
+  if (!daily.length && !(points && points.length)) {
+    wrap.innerHTML = '<div class="chart-empty">历史数据不足，暂无法预测</div>';
+    return;
+  }
+  const all = [
+    ...daily.map((h) => ({ t: h.t, cost: h.cost, kind: "h" })),
+    ...(points || []).map((f) => ({ ...f, kind: "f" })),
+  ].sort((a, b) => a.t - b.t);
+  const W = 560, H = 210, L = 52, R = 12, T = 12, B = 26;
+  const iw = W - L - R, ih = H - T - B;
+  const t0 = all[0].t, t1 = all[all.length - 1].t;
+  const maxV = Math.max(...all.map((p) => p.kind === "f" ? p.hi : p.cost), 0.01);
+  const step = niceStep(maxV / 3);
+  const yMax = Math.max(step * Math.ceil((maxV * 1.05) / step), step);
+  const x = (t) => L + ((t - t0) / (t1 - t0 || 1)) * iw;
+  const y = (v) => T + (1 - v / yMax) * ih;
+
+  let grid = "", labels = "";
+  for (let i = 0; i * step <= yMax + 1e-9; i++) {
+    const v = +(i * step).toFixed(6);
+    grid += `<line class="chart-grid" x1="${L}" y1="${y(v)}" x2="${W - R}" y2="${y(v)}"/>`;
+    labels += `<text class="chart-axis-label" x="${L - 6}" y="${y(v) + 3}" text-anchor="end">¥${v >= 100 ? Math.round(v) : v}</text>`;
+  }
+  const fmtDay = (t) => { const dd = new Date(t); return `${dd.getMonth() + 1}/${dd.getDate()}`; };
+  for (const f of [0, 0.5, 1]) {
+    const t = t0 + (t1 - t0) * f;
+    labels += `<text class="chart-axis-label" x="${x(t)}" y="${H - 8}" text-anchor="${f === 0 ? "start" : f === 1 ? "end" : "middle"}">${fmtDay(t)}</text>`;
+  }
+
+  const histPath = daily.map((p, i) => `${i ? "L" : "M"}${x(p.t).toFixed(1)},${y(p.cost).toFixed(1)}`).join("");
+  let fcPath = "", band = "";
+  if (points && points.length) {
+    const start = daily.length ? { t: daily[daily.length - 1].t, cost: daily[daily.length - 1].cost } : points[0];
+    fcPath = `M${x(start.t).toFixed(1)},${y(start.cost).toFixed(1)}` +
+      points.map((p) => `L${x(p.t).toFixed(1)},${y(p.cost).toFixed(1)}`).join("");
+    const upper = points.map((p) => `${x(p.t).toFixed(1)},${y(p.hi).toFixed(1)}`);
+    const lower = [...points].reverse().map((p) => `${x(p.t).toFixed(1)},${y(p.lo).toFixed(1)}`);
+    band = `<polygon class="fc-band" points="${x(start.t).toFixed(1)},${y(start.cost).toFixed(1)} ${upper.join(" ")} ${lower.join(" ")}"/>`;
+  }
+  const hits = all.map((p, i) => {
+    const slot = iw / all.length;
+    return `<rect class="u-hit" data-i="${i}" x="${L + slot * i}" y="${T}" width="${slot}" height="${ih}" fill="transparent"/>`;
+  }).join("");
+
+  wrap.innerHTML = `
+    <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="日消费历史与未来预测">
+      ${grid}${labels}${band}
+      <path class="chart-line" d="${histPath}"/>
+      <path class="chart-proj" d="${fcPath}"/>
+      ${hits}
+    </svg>
+    <div class="chart-tip"></div>
+    <div class="fc-legend"><span><i class="fc-solid"></i>历史日消费</span><span><i class="fc-dash"></i>预测</span><span><i class="fc-wash"></i>80% 置信区间</span></div>`;
+  attachUsageTip(wrap, (i) => {
+    const p = all[i];
+    return p.kind === "h"
+      ? `<div class="t">${fmtDay(p.t)}</div><div class="v">${cny(p.cost)}</div>`
+      : `<div class="t">${fmtDay(p.t)}（预测）</div><div class="v">${cny(p.cost)}</div><div class="r"><span>区间</span><b>${cny(p.lo)} ~ ${cny(p.hi)}</b></div>`;
+  });
+}
+
 // ---- 设置页 -----------------------------------------------------------------
 function renderSettings() {
   $("#headerActions").innerHTML = "";
@@ -896,6 +1127,7 @@ function render() {
   const titles = {
     dashboard: ["总览", "跨中转站的余额与用量一览"],
     stations: ["中转站", "管理你的 sub2api / new-api 中转站"],
+    own: ["我的站点", "自有中转站的下游用量分析与消费预测"],
     usage: ["用量统计", "分站点、分模型、分时段的 Token 消耗"],
     notify: ["通知", "告警渠道与触发规则"],
     settings: ["设置", "刷新策略、告警阈值与面板账号"],
@@ -905,6 +1137,7 @@ function render() {
   document.querySelectorAll(".nav-item").forEach((n) => n.classList.toggle("active", n.dataset.view === state.view));
   if (state.view === "dashboard") renderDashboard();
   else if (state.view === "stations") renderStations();
+  else if (state.view === "own") renderOwn();
   else if (state.view === "usage") renderUsage();
   else if (state.view === "notify") renderNotify();
   else renderSettings();
@@ -929,6 +1162,7 @@ function openModal(station) {
   $("#f-password").value = "";
   $("#f-lowBalance").value = station?.lowBalanceUsd ?? "";
   $("#f-cnyRate").value = station?.cnyPerUsd ?? "";
+  $("#f-own").checked = !!station?.isOwn;
   if (station) {
     $("#f-accessToken").placeholder = station.hasAccessToken ? "已配置，留空保持不变" : "令牌 / JWT";
     $("#f-apiKey").placeholder = station.hasApiKey ? "已配置，留空保持不变" : "sk-...";
@@ -958,6 +1192,7 @@ function syncCredFields() {
   };
   $("#f-type-hint").textContent = hints[type] || "";
   $("#l-accessToken").textContent = type.startsWith("sub2api") ? "登录令牌（JWT）" : "访问令牌";
+  $("#f-own-wrap").style.display = type === "newapi" ? "" : "none"; // 下游分析只支持 new-api
 }
 $("#f-type").onchange = syncCredFields;
 
@@ -970,6 +1205,7 @@ $("#modalSave").onclick = async () => {
     email: $("#f-email").value.trim(),
     lowBalanceUsd: $("#f-lowBalance").value.trim(),
     cnyPerUsd: $("#f-cnyRate").value.trim(),
+    isOwn: $("#f-type").value === "newapi" && $("#f-own").checked,
   };
   const at = $("#f-accessToken").value.trim();
   const ak = $("#f-apiKey").value.trim();
@@ -1233,6 +1469,21 @@ $(".main").addEventListener("click", async (e) => {
   if (uRefresh) {
     uRefresh.classList.add("spin");
     loadUsage(true).finally(() => uRefresh.classList.remove("spin"));
+    return;
+  }
+
+  // 我的站点：范围切换 / 手动刷新
+  const oRange = e.target.closest("#ownRange [data-range]");
+  if (oRange) {
+    state.ownRange = oRange.dataset.range;
+    document.querySelectorAll("#ownRange button").forEach((b) => b.classList.toggle("active", b === oRange));
+    loadOwn();
+    return;
+  }
+  const oRefresh = e.target.closest("#ownRefresh");
+  if (oRefresh) {
+    oRefresh.classList.add("spin");
+    loadOwn(true).finally(() => oRefresh.classList.remove("spin"));
     return;
   }
 

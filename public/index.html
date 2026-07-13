@@ -69,6 +69,10 @@
           <svg viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="6" rx="2"/><rect x="2" y="14" width="20" height="6" rx="2"/><path d="M6 7h.01M6 17h.01"/></svg>
           中转站
         </button>
+        <button class="nav-item" data-view="own">
+          <svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/><circle cx="19" cy="7" r="1"/></svg>
+          我的站点
+        </button>
         <button class="nav-item" data-view="usage">
           <svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><rect x="7" y="11" width="3" height="7"/><rect x="12" y="7" width="3" height="11"/><rect x="17" y="13" width="3" height="5"/></svg>
           用量统计
@@ -148,6 +152,10 @@
           <label>充值折算汇率（站点 $1 折合人民币 ¥）</label>
           <input class="input" id="f-cnyRate" placeholder="如 2 表示 $1 = ¥2，留空按 1:1" />
           <div class="hint">面板金额将按此汇率折算成人民币展示；余额告警仍按站点余额判断。</div>
+        </div>
+        <div class="form-field" id="f-own-wrap">
+          <label class="chk-line"><input type="checkbox" id="f-own" /> 这是我自己的中转站</label>
+          <div class="hint">启用「我的站点」下游分析（分用户/分模型用量与消费预测）。需要管理员（root）账号的系统访问令牌与用户 ID。</div>
         </div>
       </div>
       <div class="modal-foot">
