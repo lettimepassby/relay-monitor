@@ -2,24 +2,19 @@
 // 中转站管理页：站点列表 + 添加/编辑弹窗 + 单站刷新/删除 + 余额趋势详情弹窗
 // 功能对照 v1 app.js：renderStations/stationRow（553-586、193-288）、站点表单弹窗（1487-1614）、
 // 趋势弹窗 openTrend/drawChart（1675-1822）——文案与数字口径逐条对齐，布局用 Pro 风格重排
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { PageContainer, ProCard } from "@ant-design/pro-components";
 import {
   App,
   Button,
   Checkbox,
-  Col,
   DatePicker,
   Empty,
   Form,
   Input,
   Modal,
-  Row,
-  Segmented,
   Select,
   Space,
-  Spin,
-  Statistic,
   Tag,
   theme,
 } from "antd";
@@ -31,7 +26,7 @@ import {
   CloseOutlined,
 } from "@ant-design/icons";
 import { Line } from "@ant-design/plots";
-import ChartBox from "../chart-box";
+import TrendModal from "../trend-modal";
 import LastRefreshed from "../last-refreshed";
 import dayjs from "dayjs";
 import { api, cny, usd, rateOf, fmtTokens, fmtEta, statusOf } from "../../../lib/client";
@@ -113,87 +108,6 @@ function Spark({ pts }: { pts: any[] }) {
         style={{ lineWidth: 1.5 }}
       />
     </div>
-  );
-}
-
-// ---- 详情弹窗的余额走势图（v1 drawChart 平移：历史实线 + 虚线耗尽投影）---------
-function TrendChart({ points, prediction }: { points: any[]; prediction: any }) {
-  const { dark } = useThemeMode();
-  const { token } = theme.useToken();
-  const cfg = useMemo(() => {
-    if (!points || points.length < 2) return null;
-    const t0 = points[0][0];
-    const lastT = points[points.length - 1][0];
-    const lastR = points[points.length - 1][1];
-    // 投影段：最多延伸一个历史窗口的长度，避免把历史压扁（同 v1）
-    let proj: { t: number; r: number; hitsZero: boolean } | null = null;
-    if (prediction && prediction.burnPerDay > 0 && prediction.etaDays != null) {
-      const etaMs = new Date(prediction.etaAt).getTime();
-      const cap = lastT + Math.max(lastT - t0, 3600000);
-      if (etaMs <= cap) proj = { t: etaMs, r: 0, hitsZero: true };
-      else proj = { t: cap, r: Math.max(lastR - prediction.burnPerDay * ((cap - lastT) / 86400000), 0), hitsZero: false };
-    }
-    const data = [
-      ...points.map((p: any) => ({ date: new Date(p[0]), v: p[1], s: "余额" })),
-      ...(proj
-        ? [
-            { date: new Date(lastT), v: lastR, s: "预测" },
-            { date: new Date(proj.t), v: proj.r, s: "预测" },
-          ]
-        : []),
-    ];
-    return {
-      data,
-      xField: "date",
-      yField: "v",
-      colorField: "s",
-      height: 280,
-      animate: false,
-      theme: dark ? "classicDark" : "classic",
-      scale: { color: { range: ["#1677ff", "#faad14"] }, y: { domainMin: 0, nice: true } },
-      // 预测段画虚线（G2 折线的 style 回调收到的是该分组的数据数组）
-      style: { lineWidth: 2, lineDash: (d: any[]) => (d[0]?.s === "预测" ? [5, 5] : null) },
-      axis: {
-        x: { labelFormatter: (d: any) => fmtClock(d) },
-        y: { labelFormatter: (v: any) => `¥${v >= 100 ? Math.round(v) : v}` },
-      },
-      legend: proj ? undefined : false,
-      tooltip: {
-        title: (d: any) => fmtClock(d.date),
-        items: [{ channel: "y", valueFormatter: (v: any) => cny(v) }],
-      },
-      // 耗尽点：投影落到 0 时标红点 + 「预计耗尽」时间
-      annotations: proj?.hitsZero
-        ? [
-            {
-              type: "point",
-              data: [{ date: new Date(proj.t), v: 0 }],
-              encode: { x: "date", y: "v" },
-              style: { fill: COLOR.danger, r: 4 },
-              tooltip: false,
-            },
-            {
-              type: "text",
-              data: [{ date: new Date(proj.t), v: 0 }],
-              encode: { x: "date", y: "v" },
-              style: { text: `预计耗尽 ${fmtClock(proj.t)}`, dy: -10, dx: -6, textAlign: "end", fill: COLOR.danger, fontSize: 12 },
-              tooltip: false,
-            },
-          ]
-        : [],
-    } as any;
-  }, [points, prediction, dark]);
-
-  if (!cfg)
-    return (
-      <div style={{ height: 280, display: "flex", alignItems: "center", justifyContent: "center", color: token.colorTextSecondary }}>
-        数据点不足（需要至少两次成功查询），稍后再来看看
-      </div>
-    );
-  return (
-    <ChartBox h={280}>
-      <Line {...cfg} />
-    </ChartBox>
   );
 }
 
@@ -369,13 +283,6 @@ function StationRow(props: {
 }
 
 // ---- 页面 --------------------------------------------------------------------
-const RANGES = [
-  { label: "24 小时", value: 24 },
-  { label: "3 天", value: 72 },
-  { label: "7 天", value: 168 },
-  { label: "30 天", value: 720 },
-];
-
 export default function StationsPage() {
   const { message, modal } = App.useApp();
   const { token } = theme.useToken();
@@ -398,13 +305,8 @@ export default function StationsPage() {
   const [purchases, setPurchases] = useState<any[]>([]); // 固定成本付费记录行
   const formType = Form.useWatch("type", form);
 
-  // 趋势详情弹窗
+  // 趋势详情弹窗（数据拉取与范围切换在共享组件 TrendModal 内）
   const [trendStation, setTrendStation] = useState<any>(null);
-  const [trendHours, setTrendHours] = useState(72);
-  const [trendData, setTrendData] = useState<any>(null);
-  const [trendErr, setTrendErr] = useState("");
-  const [trendLoading, setTrendLoading] = useState(false);
-  const trendSeq = useRef(0); // 丢弃过期响应：快速切换站点/范围时慢的那次不能覆盖后打开的图
 
   // 列表加载（GET /api/stations 同时带回全局设置，同 v1 reload）
   const reload = useCallback(async () => {
@@ -554,38 +456,10 @@ export default function StationsPage() {
     }
   };
 
-  // ---- 趋势详情弹窗（v1 openTrend 平移，外加范围切换）-------------------------
-  const openTrend = (s: any) => {
-    setTrendStation(s);
-    setTrendHours(72);
-    setTrendData(null);
-    setTrendErr("");
-  };
-  useEffect(() => {
-    if (!trendStation) return;
-    const seq = ++trendSeq.current;
-    setTrendLoading(true);
-    setTrendErr("");
-    api(`/api/stations/${trendStation.id}/history?hours=${trendHours}`)
-      .then((r) => {
-        if (seq !== trendSeq.current) return;
-        setTrendData(r);
-      })
-      .catch((e) => {
-        if (seq !== trendSeq.current) return;
-        setTrendData(null);
-        setTrendErr(e.message);
-      })
-      .finally(() => {
-        if (seq === trendSeq.current) setTrendLoading(false);
-      });
-  }, [trendStation, trendHours]);
-
+  // ---- 趋势详情弹窗（v1 openTrend 平移，实现见共享组件 TrendModal）-----------
+  const openTrend = (s: any) => setTrendStation(s);
   // 弹窗内 KPI 用列表里的最新站点数据（轮询会更新）
   const trendCur = trendStation ? stations.find((x) => x.id === trendStation.id) || trendStation : null;
-  const trendRate = trendCur ? rateOf(trendCur) : 1;
-  const trendPred = trendData?.prediction;
-  const trendEta = etaText(trendPred, trendRate, rules.etaDays ?? 3);
 
   // 表单当前类型的凭证需求与可见性（v1 syncCredFields）
   const curType = types.find((t) => t.value === formType);
@@ -758,81 +632,8 @@ export default function StationsPage() {
         </Form>
       </Modal>
 
-      {/* ---- 趋势详情弹窗 ---- */}
-      <Modal
-        title={trendStation ? `余额趋势 · ${trendStation.name}` : ""}
-        open={!!trendStation}
-        onCancel={() => { setTrendStation(null); trendSeq.current++; }}
-        footer={null}
-        width={760}
-      >
-        {trendCur && (
-          <>
-            <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
-              <Col xs={12} sm={6}>
-                <Statistic
-                  title="当前余额"
-                  value={trendCur.balance?.ok ? cny(trendCur.balance.remaining * trendRate) : "—"}
-                />
-                {trendCur.balance?.ok && trendRate !== 1 ? (
-                  <div style={hint}>站点余额 {usd(trendCur.balance.remaining)}</div>
-                ) : null}
-              </Col>
-              <Col xs={12} sm={6}>
-                <Statistic
-                  title="今日消耗"
-                  value={
-                    trendCur.todayUsed != null
-                      ? (trendCur.todayIsEstimate ? "≈ " : "") + cny(trendCur.todayUsed * trendRate)
-                      : "—"
-                  }
-                />
-                {trendCur.todayTokens != null || trendCur.todayRequests != null ? (
-                  <div style={hint}>
-                    {[
-                      trendCur.todayTokens != null ? fmtTokens(trendCur.todayTokens) + " tokens" : null,
-                      trendCur.todayRequests != null ? trendCur.todayRequests.toLocaleString("en-US") + " 次" : null,
-                    ].filter(Boolean).join(" · ")}
-                  </div>
-                ) : null}
-              </Col>
-              <Col xs={12} sm={6}>
-                <Statistic
-                  title="日均消耗（估算）"
-                  value={trendPred?.burnPerDay > 0 ? cny(trendPred.burnPerDay * trendRate) : "—"}
-                />
-              </Col>
-              <Col xs={12} sm={6}>
-                <Statistic
-                  title="预计耗尽"
-                  value={trendPred?.etaDays != null ? fmtEta(trendPred.etaDays) : "—"}
-                  valueStyle={
-                    trendEta?.cls ? { color: trendEta.cls === "danger" ? COLOR.danger : COLOR.warn } : undefined
-                  }
-                />
-              </Col>
-            </Row>
-            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8, overflowX: "auto" }}>
-              <Segmented options={RANGES} value={trendHours} onChange={(v) => setTrendHours(Number(v))} />
-            </div>
-            <Spin spinning={trendLoading}>
-              {trendErr ? (
-                <div style={{ height: 280, display: "flex", alignItems: "center", justifyContent: "center", color: token.colorTextSecondary }}>
-                  {trendErr}
-                </div>
-              ) : trendData ? (
-                // 图表纵轴按充值汇率折算成 ¥（耗尽时间等预测不受影响，同 v1）
-                <TrendChart
-                  points={(trendData.points || []).map((p: any) => [p[0], p[1] * trendRate])}
-                  prediction={trendPred ? { ...trendPred, burnPerDay: trendPred.burnPerDay * trendRate } : trendPred}
-                />
-              ) : (
-                <div style={{ height: 280 }} />
-              )}
-            </Spin>
-          </>
-        )}
-      </Modal>
+      {/* ---- 趋势详情弹窗（共享组件，总览页同款） ---- */}
+      <TrendModal station={trendCur} onClose={() => setTrendStation(null)} etaDaysRule={rules.etaDays ?? 3} />
     </PageContainer>
   );
 }

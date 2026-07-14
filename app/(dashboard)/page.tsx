@@ -4,11 +4,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PageContainer, ProCard } from "@ant-design/pro-components";
 import LastRefreshed from "./last-refreshed";
-import { App, Button, Col, Empty, Row, Segmented, Tag, Tooltip, Typography, theme } from "antd";
+import { App, Button, Col, Empty, Row, Segmented, Tag, Typography, theme } from "antd";
 import { ReloadOutlined } from "@ant-design/icons";
 import { Line, Bar } from "@ant-design/plots";
 import { api, cny, usd, rateOf, fmtTokens, fmtEta, statusOf } from "../../lib/client";
 import ChartBox from "./chart-box";
+import TrendModal from "./trend-modal";
 import { useThemeMode } from "../providers";
 
 const { Text } = Typography;
@@ -151,6 +152,8 @@ export default function OverviewPage() {
   const [overviewErr, setOverviewErr] = useState<string | null>(null);
   const [refreshingId, setRefreshingId] = useState<string | null>(null);
   const [refreshedAt, setRefreshedAt] = useState<number | null>(null);
+  // 趋势详情弹窗（共享组件 TrendModal，与中转站页点击行为一致）
+  const [trendStation, setTrendStation] = useState<any>(null);
   const hoursRef = useRef(trendHours);
   hoursRef.current = trendHours;
 
@@ -394,8 +397,10 @@ export default function OverviewPage() {
       if (s.todayTokens != null) pieces.push(<span key="k">{fmtTokens(s.todayTokens)} tokens</span>);
     }
     if (eta) pieces.push(<span key="e" style={{ color: clsColor(eta.cls) }}>{eta.text}</span>);
+    if (pieces.length) pieces.push(<span key="c" style={{ color: token.colorTextSecondary }}>点击查看趋势</span>);
     return (
-      <div key={s.id} style={rowStyle}>
+      // 整行可点开余额趋势弹窗（同 v1 总览 / 中转站页行为）
+      <div key={s.id} style={{ ...rowStyle, cursor: "pointer" }} title="查看余额趋势" onClick={() => setTrendStation(s)}>
         <div style={plateStyle}>{PLATE[s.type] || "?"}</div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 600, display: "flex", alignItems: "center", flexWrap: "wrap" }}>
@@ -406,12 +411,10 @@ export default function OverviewPage() {
           </div>
           <div style={{ fontSize: 12, color: token.colorTextSecondary, marginTop: 2 }}>{meta}</div>
           {b && b.ok && s.spark && s.spark.length >= 2 ? (
-            <Tooltip title="近 48 小时余额走势">
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
-                <SparkSvg pts={s.spark} />
-                <span style={{ fontSize: 12, color: token.colorTextSecondary }}>近 48h 余额</span>
-              </div>
-            </Tooltip>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
+              <SparkSvg pts={s.spark} />
+              <span style={{ fontSize: 12, color: token.colorTextSecondary }}>近 48h 余额</span>
+            </div>
           ) : null}
           {pieces.length ? (
             <div style={{ fontSize: 12, color: token.colorTextSecondary, marginTop: 4, display: "flex", flexWrap: "wrap", gap: "0 6px" }}>
@@ -431,7 +434,8 @@ export default function OverviewPage() {
             size="small"
             icon={<ReloadOutlined />}
             loading={refreshingId === s.id}
-            onClick={() => refreshOne(s.id)}
+            // 行本身可点开趋势弹窗，刷新按钮要拦住冒泡避免误开
+            onClick={(e) => { e.stopPropagation(); refreshOne(s.id); }}
             title="刷新"
           />
         </div>
@@ -616,6 +620,13 @@ export default function OverviewPage() {
           />
         </ProCard>
       )}
+
+      {/* 余额趋势详情弹窗（共享组件，中转站页同款）；KPI 用列表里的最新站点数据（轮询会更新） */}
+      <TrendModal
+        station={trendStation ? stations.find((x) => x.id === trendStation.id) || trendStation : null}
+        onClose={() => setTrendStation(null)}
+        etaDaysRule={rules?.etaDays ?? 3}
+      />
     </PageContainer>
   );
 }
