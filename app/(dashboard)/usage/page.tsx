@@ -8,6 +8,7 @@ import { Alert, Button, Segmented, Select, Space, Statistic, Typography, theme }
 import { ReloadOutlined } from "@ant-design/icons";
 import { Bar, Column } from "@ant-design/plots";
 import { api, cny4, fmtTokens, rateOf } from "../../../lib/client";
+import ChartBox from "../chart-box";
 import { useThemeMode } from "../../providers";
 
 // 时间档位（照抄 v1 USAGE_RANGES）
@@ -356,6 +357,7 @@ export default function UsagePage() {
               {trendEmpty ? (
                 <ChartEmpty text="该范围内暂无用量数据" />
               ) : (
+                <ChartBox h={CHART_H}>
                 <Column
                   data={agg.buckets}
                   xField="label"
@@ -369,6 +371,7 @@ export default function UsagePage() {
                   }}
                   tooltip={{ title: (d: any) => d.label, items: tipItems }}
                 />
+                </ChartBox>
               )}
             </ProCard>
             <ProCard
@@ -385,6 +388,7 @@ export default function UsagePage() {
               {!modelChartItems.length ? (
                 <ChartEmpty text="该范围内暂无用量数据" />
               ) : (
+                <ChartBox h={CHART_H}>
                 <Bar
                   data={modelChartItems}
                   xField="model"
@@ -399,6 +403,7 @@ export default function UsagePage() {
                   label={{ text: (d: any) => fmtTokens(d.tokens), position: "right", dx: 4 }}
                   tooltip={{ title: (d: any) => d.model, items: tipItems }}
                 />
+                </ChartBox>
               )}
             </ProCard>
           </ProCard>

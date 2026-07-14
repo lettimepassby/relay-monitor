@@ -7,6 +7,7 @@ import { App, Button, Col, Empty, Row, Segmented, Tag, Tooltip, Typography, them
 import { ReloadOutlined } from "@ant-design/icons";
 import { Line, Bar } from "@ant-design/plots";
 import { api, cny, usd, rateOf, fmtTokens, fmtEta, statusOf } from "../../lib/client";
+import ChartBox from "./chart-box";
 import { useThemeMode } from "../providers";
 
 const { Text } = Typography;
@@ -575,7 +576,7 @@ export default function OverviewPage() {
               {overviewErr && !overview ? (
                 <ChartEmpty text={overviewErr} />
               ) : lineConfig ? (
-                <Line {...(lineConfig as any)} />
+                <ChartBox h={CHART_H}><Line {...(lineConfig as any)} /></ChartBox>
               ) : (
                 <ChartEmpty text="数据积累中（需要至少两次成功查询）" />
               )}
@@ -586,7 +587,7 @@ export default function OverviewPage() {
               style={{ height: "100%" }}
               title={<CardTitle title="今日消耗对比" sub="各站当日 0 点至今实际扣费（¥）" />}
             >
-              {barConfig ? <Bar {...(barConfig as any)} /> : <ChartEmpty text="今日暂无消耗" />}
+              {barConfig ? <ChartBox h={CHART_H}><Bar {...(barConfig as any)} /></ChartBox> : <ChartEmpty text="今日暂无消耗" />}
             </ProCard>
           </Col>
         </Row>

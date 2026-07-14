@@ -8,6 +8,7 @@ import { PageContainer, ProCard } from "@ant-design/pro-components";
 import { Col, Empty, Row, Segmented, Statistic, Typography, theme } from "antd";
 import { Bar, Column, DualAxes, Heatmap, Line, Pie } from "@ant-design/plots";
 import { api, cny } from "../../../lib/client";
+import ChartBox from "../chart-box";
 import { useThemeMode } from "../../providers";
 
 const { Text } = Typography;
@@ -274,11 +275,20 @@ export default function AnalyticsPage() {
                 </span>
               ))}
             </div>
+            <ChartBox h={CHART_H}>
             <DualAxes
               height={CHART_H}
               theme={chartTheme}
               xField="date"
               legend={false}
+              /* color scale 必须放顶层：DualAxes 会合并子图的 color 通道，
+                 子图各写各的 range 会互相覆盖（毛利的橙色曾把成本柱也染橙，与图例不符） */
+              scale={{
+                color: {
+                  domain: derived.hasIncome ? ["成本", "收入", "毛利"] : ["成本"],
+                  range: derived.hasIncome ? ["#1677ff", "#52c41a", "#fa8c16"] : ["#1677ff"],
+                },
+              }}
               children={[
               {
                 data: derived.cashCols,
@@ -286,7 +296,6 @@ export default function AnalyticsPage() {
                 yField: "cny",
                 colorField: "type",
                 group: true,
-                scale: { color: { domain: derived.hasIncome ? ["成本", "收入"] : ["成本"], range: ["#1677ff", "#52c41a"] } },
                 axis: yAxisCny,
                 tooltip: tooltipCny,
               },
@@ -296,14 +305,15 @@ export default function AnalyticsPage() {
                     type: "line",
                     yField: "cny",
                     colorField: "type",
-                    style: { lineWidth: 2, stroke: "#fa8c16" },
+                    style: { lineWidth: 2 },
                     axis: { y: { position: "right", labelFormatter: (v: number) => `¥${v}` } },
-                    scale: { y: { independent: true }, color: { range: ["#fa8c16"] } },
+                    scale: { y: { independent: true } },
                     tooltip: tooltipCny,
                   }]
                 : []),
               ]}
             />
+            </ChartBox>
           </>
         ) : (
           <Blank />
@@ -319,6 +329,7 @@ export default function AnalyticsPage() {
             loading={loading && !data}
           >
             {derived && derived.hasData ? (
+              <ChartBox h={CHART_H}>
               <Heatmap
                 height={CHART_H}
                 theme={chartTheme}
@@ -334,6 +345,7 @@ export default function AnalyticsPage() {
                 legend={{ color: { position: "bottom" } }}
                 tooltip={{ items: [{ channel: "color", valueFormatter: (v: number) => cny(v) }] }}
               />
+              </ChartBox>
             ) : (
               <Blank />
             )}
@@ -347,6 +359,7 @@ export default function AnalyticsPage() {
             loading={loading && !data}
           >
             {derived && derived.pie.length ? (
+              <ChartBox h={CHART_H}>
               <Pie
                 height={CHART_H}
                 theme={chartTheme}
@@ -358,6 +371,7 @@ export default function AnalyticsPage() {
                 legend={{ color: { position: "bottom" } }}
                 tooltip={{ items: [{ channel: "y", valueFormatter: (v: number) => cny(v) }] }}
               />
+              </ChartBox>
             ) : (
               <Blank />
             )}
@@ -374,6 +388,7 @@ export default function AnalyticsPage() {
             loading={loading && !data}
           >
             {derived && derived.runway.length ? (
+              <ChartBox h={CHART_H}>
               <Bar
                 height={CHART_H}
                 theme={chartTheme}
@@ -385,6 +400,7 @@ export default function AnalyticsPage() {
                 axis={{ y: { title: "天" }, x: { title: null } }}
                 tooltip={{ items: [{ channel: "y", valueFormatter: (v: number) => `${v} 天` }] }}
               />
+              </ChartBox>
             ) : (
               <Blank />
             )}
@@ -398,6 +414,7 @@ export default function AnalyticsPage() {
             loading={loading && !data}
           >
             {derived && derived.hasData ? (
+              <ChartBox h={CHART_H}>
               <Column
                 height={CHART_H}
                 theme={chartTheme}
@@ -411,6 +428,7 @@ export default function AnalyticsPage() {
                 legend={{ color: { position: "top" } }}
                 tooltip={tooltipCny}
               />
+              </ChartBox>
             ) : (
               <Blank />
             )}
@@ -425,6 +443,7 @@ export default function AnalyticsPage() {
         loading={loading && !data}
       >
         {derived && derived.hasData ? (
+          <ChartBox h={CHART_H}>
           <Line
             height={CHART_H}
             theme={chartTheme}
@@ -436,6 +455,7 @@ export default function AnalyticsPage() {
             axis={yAxisCny}
             tooltip={tooltipCny}
           />
+          </ChartBox>
         ) : (
           <Blank />
         )}

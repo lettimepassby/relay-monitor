@@ -31,6 +31,7 @@ import {
   CloseOutlined,
 } from "@ant-design/icons";
 import { Line } from "@ant-design/plots";
+import ChartBox from "../chart-box";
 import dayjs from "dayjs";
 import { api, cny, usd, rateOf, fmtTokens, fmtEta, statusOf } from "../../../lib/client";
 import { useThemeMode } from "../../providers";
@@ -188,7 +189,11 @@ function TrendChart({ points, prediction }: { points: any[]; prediction: any }) 
         数据点不足（需要至少两次成功查询），稍后再来看看
       </div>
     );
-  return <Line {...cfg} />;
+  return (
+    <ChartBox h={280}>
+      <Line {...cfg} />
+    </ChartBox>
+  );
 }
 
 // ---- 单行站点（v1 stationRow 平移）-------------------------------------------

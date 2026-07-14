@@ -22,6 +22,7 @@ import {
 } from "antd";
 import { PlusOutlined, ReloadOutlined } from "@ant-design/icons";
 import { Bar, Column, Line } from "@ant-design/plots";
+import ChartBox from "../chart-box";
 import { api, cny, cny4, fmtTokens, rateOf } from "../../../lib/client";
 import { useThemeMode } from "../../providers";
 
@@ -595,6 +596,7 @@ export default function MyStationPage() {
             {!buckets.length || buckets.every((b: any) => !b.tokens) ? (
               <ChartEmpty text="该范围内暂无用量数据" />
             ) : (
+              <ChartBox h={CHART_H}>
               <Column
                 theme={plotTheme}
                 height={CHART_H}
@@ -611,6 +613,7 @@ export default function MyStationPage() {
                   ],
                 }}
               />
+              </ChartBox>
             )}
           </ProCard>
         </Col>
@@ -619,6 +622,7 @@ export default function MyStationPage() {
             {!modelItems.length ? (
               <ChartEmpty text="该范围内暂无用量数据" />
             ) : (
+              <ChartBox h={CHART_H}>
               <Bar
                 theme={plotTheme}
                 height={CHART_H}
@@ -636,6 +640,7 @@ export default function MyStationPage() {
                   ],
                 }}
               />
+              </ChartBox>
             )}
           </ProCard>
         </Col>
@@ -657,6 +662,7 @@ export default function MyStationPage() {
           {hourlyAll.length < 4 ? (
             <ChartEmpty text="小时数据不足" />
           ) : (
+            <ChartBox h={CHART_H}>
             <Column
               theme={plotTheme}
               height={CHART_H}
@@ -679,6 +685,7 @@ export default function MyStationPage() {
                 ],
               }}
             />
+            </ChartBox>
           )}
         </ProCard>
       ) : null}
@@ -691,6 +698,7 @@ export default function MyStationPage() {
               <ChartEmpty text="历史数据不足，暂无法预测" />
             ) : (
               <>
+                <ChartBox h={CHART_H}>
                 <Line
                   theme={plotTheme}
                   height={CHART_H}
@@ -729,8 +737,9 @@ export default function MyStationPage() {
                     ],
                   }}
                 />
+                </ChartBox>
                 {/* 图例（对照 v1 .fc-legend） */}
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 16, marginTop: 8, fontSize: 12, color: token.colorTextSecondary }}>
+                <div style={{ display: "flex", flexWrap: "wrap", minWidth: 0, gap: 16, marginTop: 8, fontSize: 12, color: token.colorTextSecondary }}>
                   <span><span style={{ display: "inline-block", width: 18, borderTop: "2px solid #1677ff", verticalAlign: "middle", marginRight: 4 }} />历史日消费</span>
                   <span><span style={{ display: "inline-block", width: 18, borderTop: "2px dashed #1677ff", verticalAlign: "middle", marginRight: 4 }} />预测</span>
                   <span><span style={{ display: "inline-block", width: 18, height: 10, background: "rgba(22,119,255,0.12)", verticalAlign: "middle", marginRight: 4 }} />80% 置信区间</span>
@@ -744,6 +753,7 @@ export default function MyStationPage() {
             {!userItems.length ? (
               <ChartEmpty text="该范围内暂无数据" />
             ) : (
+              <ChartBox h={CHART_H}>
               <Bar
                 theme={plotTheme}
                 height={CHART_H}
@@ -761,6 +771,7 @@ export default function MyStationPage() {
                   ],
                 }}
               />
+              </ChartBox>
             )}
           </ProCard>
         </Col>
