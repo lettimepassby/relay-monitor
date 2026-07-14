@@ -385,7 +385,10 @@ export default function MyStationPage() {
 
   const pctCol = (cost: number) => (totCost > 0 ? ((cost / totCost) * 100).toFixed(1) + "%" : "—");
 
-  const modelItems = top10(models, "model");
+  // byModel 按消费(cost)降序（v1 口径，模型明细表沿用）；本图纵轴是 tokens，
+  // 必须按 tokens 重排——否则巨量 token 的便宜模型排在中间、长尾全是隐形细条，
+  // top10 折叠也会按错误顺序吞掉高 token 模型
+  const modelItems = top10([...models].sort((a, b) => (b.tokens || 0) - (a.tokens || 0)), "model");
   const userItems = top10(users, "user");
 
   return (
