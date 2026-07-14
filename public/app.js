@@ -339,7 +339,7 @@ function renderDashboard() {
     </div>
     <div class="panel chart-card">
       <div class="chart-card-head">
-        <div><h3>日均消耗对比</h3><div class="chart-sub">按近 48 小时消耗速度回归估算（¥/天）</div></div>
+        <div><h3>今日消耗对比</h3><div class="chart-sub">各站当日 0 点至今实际扣费（¥）</div></div>
       </div>
       <div class="chart-wrap" id="burnChart"></div>
     </div>
@@ -479,20 +479,31 @@ function drawTotalChart(wrap, ov) {
   });
 }
 
-// 各站日均消耗横向条形图：单一色相（对比的是数值不是身份），条端直接标数值（¥/天）
+// 各站「今日实际消耗」横向条形图：单一色相（对比的是数值不是身份），条端直接标数值（¥）。
+// 数值取当日实际扣费 todayUsed（真实数据），非预测——todayIsEstimate 为历史推算，tooltip 标 ≈。
 function drawBurnBars(wrap, stations) {
   let items = stations
-    .map((s) => ({ name: s.name, burn: (s.prediction?.burnPerDay || 0) * rateOf(s), eta: s.prediction?.etaDays ?? null }))
+    .map((s) => ({
+      name: s.name,
+      burn: (s.todayUsed || 0) * rateOf(s),
+      est: !!s.todayIsEstimate,
+      eta: s.prediction?.etaDays ?? null,
+    }))
     .filter((x) => x.burn > 0)
     .sort((a, b) => b.burn - a.burn);
   if (!items.length) {
-    wrap.innerHTML = '<div class="chart-empty">暂无消耗数据（需要几次查询后才能估算）</div>';
+    wrap.innerHTML = '<div class="chart-empty">今日暂无消耗</div>';
     return;
   }
   if (items.length > 8) {
     const rest = items.slice(7);
     items = items.slice(0, 7);
-    items.push({ name: `其他 ${rest.length} 个`, burn: Math.round(rest.reduce((a, x) => a + x.burn, 0) * 100) / 100, eta: null });
+    items.push({
+      name: `其他 ${rest.length} 个`,
+      burn: Math.round(rest.reduce((a, x) => a + x.burn, 0) * 100) / 100,
+      est: rest.some((x) => x.est),
+      eta: null,
+    });
   }
   const W = 380, rowH = 32, T = 6, B = 6, nameW = 112, valW = 66;
   const barMax = W - nameW - valW - 12;
@@ -510,7 +521,7 @@ function drawBurnBars(wrap, stations) {
       <rect class="bar-hit" data-i="${i}" x="0" y="${T + i * rowH}" width="${W}" height="${rowH}" fill="transparent"/>
     </g>`;
   }).join("");
-  wrap.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="各站日均消耗对比">${rows}</svg><div class="chart-tip" id="burnTip"></div>`;
+  wrap.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="各站今日消耗对比">${rows}</svg><div class="chart-tip" id="burnTip"></div>`;
 
   const svg = wrap.querySelector("svg");
   const tip = wrap.querySelector("#burnTip");
@@ -519,7 +530,7 @@ function drawBurnBars(wrap, stations) {
     if (!hit) { tip.style.display = "none"; return; }
     const it = items[Number(hit.dataset.i)];
     tip.style.display = "block";
-    tip.innerHTML = `<div class="t">${esc(it.name)}</div><div class="v">${cny(it.burn)}/天</div>` +
+    tip.innerHTML = `<div class="t">${esc(it.name)}${it.est ? " · 历史推算" : ""}</div><div class="v">${it.est ? "≈ " : ""}${cny(it.burn)}</div>` +
       (it.eta != null ? `<div class="t">预计 ${it.eta} 天后耗尽</div>` : "");
     const wrapRect = wrap.getBoundingClientRect();
     tip.style.left = Math.min(e.clientX - wrapRect.left + 14, wrapRect.width - 150) + "px";
