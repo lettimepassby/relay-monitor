@@ -1,5 +1,7 @@
 # 中转站余额监控 · Relay Monitor v2
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
 监控 **sub2api** 与 **new-api** 类中转站余额的自托管面板。
 **v2 技术栈**：Next.js 16 全栈（App Router + Route Handlers）+ Ant Design Pro（antd 6 + pro-components）+ MySQL 持久化，浅色 / 深色双主题。
 
@@ -103,3 +105,7 @@ relay-monitor/
 - 中转站凭证保存于你自有的 MySQL（`stations` 表）——这是查询上游所必需的；请妥善保护数据库访问权限
 - API 响应中不回传任何令牌 / 密钥 / 密码原文
 - 构建产物经文件追踪排除，凭证目录绝不进入镜像
+
+## 开源协议
+
+[MIT](LICENSE) © lettimepassby
