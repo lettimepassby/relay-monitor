@@ -35,7 +35,8 @@ ARG GIT_SHA=dev
 ENV APP_COMMIT=$GIT_SHA
 
 EXPOSE 8787
+# 健康检查打首页（登录壳，未登录也 200）；/api/meta 需要登录会 401 导致误报 unhealthy
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s \
-  CMD wget -q --spider http://127.0.0.1:8787/api/meta || exit 1
+  CMD wget -q --spider http://127.0.0.1:8787/ || exit 1
 
 CMD ["sh", "-c", "node db/migrate.js && exec node server.js"]

@@ -1,6 +1,6 @@
 {
   "name": "relay-monitor",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "private": true,
   "type": "module",
   "description": "中转站余额监控面板 v2：Next.js 全栈 + Ant Design Pro (antd 6) + MySQL",
