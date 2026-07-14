@@ -28,7 +28,14 @@ const APP_INFO = {
 };
 
 const store = new Store(join(__dirname, "data", "stations.json"));
-await store.load();
+try {
+  await store.load();
+} catch (err) {
+  // 数据文件损坏/不可读：store.load() 已备份并中止，此处打印致命信息并退出，
+  // 绝不带着空状态继续运行（那会覆盖掉现有站点凭证）。
+  console.error(`\n[致命] ${err.message}\n`);
+  process.exit(1);
+}
 const history = await new History(join(__dirname, "data", "history.json")).load();
 const sessions = await new SessionManager(join(__dirname, "data", "secret.key")).init();
 
