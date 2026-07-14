@@ -32,6 +32,7 @@ import {
 } from "@ant-design/icons";
 import { Line } from "@ant-design/plots";
 import ChartBox from "../chart-box";
+import LastRefreshed from "../last-refreshed";
 import dayjs from "dayjs";
 import { api, cny, usd, rateOf, fmtTokens, fmtEta, statusOf } from "../../../lib/client";
 import { useThemeMode } from "../../providers";
@@ -388,6 +389,7 @@ export default function StationsPage() {
   const [loaded, setLoaded] = useState(false);
   const [refreshingAll, setRefreshingAll] = useState(false);
   const [refreshingIds, setRefreshingIds] = useState<Record<string, boolean>>({});
+  const [refreshedAt, setRefreshedAt] = useState<number | null>(null);
 
   // 添加/编辑弹窗
   const [modalOpen, setModalOpen] = useState(false);
@@ -410,6 +412,7 @@ export default function StationsPage() {
     setStations(r.stations);
     setSettings(r.settings);
     setLoaded(true);
+    setRefreshedAt(Date.now());
   }, []);
 
   useEffect(() => {
@@ -594,6 +597,7 @@ export default function StationsPage() {
       title="中转站"
       subTitle="管理你的 sub2api / new-api 中转站"
       extra={[
+        <LastRefreshed key="last-refreshed" at={refreshedAt} />,
         <Button key="refresh" icon={<ReloadOutlined />} loading={refreshingAll} onClick={onRefreshAll}>刷新</Button>,
         <Button key="add" type="primary" icon={<PlusOutlined />} onClick={() => openModal(null)}>添加中转站</Button>,
       ]}

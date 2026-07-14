@@ -9,6 +9,7 @@ import { ReloadOutlined } from "@ant-design/icons";
 import { Bar, Column } from "@ant-design/plots";
 import { api, cny4, fmtTokens, rateOf } from "../../../lib/client";
 import ChartBox from "../chart-box";
+import LastRefreshed from "../last-refreshed";
 import { useThemeMode } from "../../providers";
 
 // 时间档位（照抄 v1 USAGE_RANGES）
@@ -69,6 +70,7 @@ export default function UsagePage() {
   const [data, setData] = useState<any>(null); // /api/usage 响应
   const [err, setErr] = useState<string>("");
   const [refreshing, setRefreshing] = useState(false);
+  const [refreshedAt, setRefreshedAt] = useState<number | null>(null);
   // 与 v1 loadUsage 相同的 30 秒前端缓存（单槽，按 range 记）
   const cacheRef = useRef<{ range: string; at: number; data: any } | null>(null);
   const rangeRef = useRef(range);
@@ -93,6 +95,7 @@ export default function UsagePage() {
       const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
       const resp = await api(`/api/usage?range=${r}&tz=${encodeURIComponent(tz)}`);
       cacheRef.current = { range: r, at: Date.now(), data: resp };
+      setRefreshedAt(Date.now());
       if (rangeRef.current === r) {
         setData(resp);
         setErr("");
@@ -253,6 +256,7 @@ export default function UsagePage() {
       title="用量统计"
       subTitle="分站点、分模型、分时段的 Token 消耗"
       extra={[
+        <LastRefreshed key="last-refreshed" at={refreshedAt} />,
         <Button key="refresh" icon={<ReloadOutlined />} loading={refreshing} onClick={onRefresh}>
           刷新
         </Button>,

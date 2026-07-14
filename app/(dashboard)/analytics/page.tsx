@@ -9,6 +9,7 @@ import { Col, Empty, Row, Segmented, Statistic, Typography, theme } from "antd";
 import { Bar, Column, DualAxes, Heatmap, Line, Pie } from "@ant-design/plots";
 import { api, cny } from "../../../lib/client";
 import ChartBox from "../chart-box";
+import LastRefreshed from "../last-refreshed";
 import { useThemeMode } from "../../providers";
 
 const { Text } = Typography;
@@ -50,11 +51,13 @@ export default function AnalyticsPage() {
   const [data, setData] = useState<any>(null);
   const [own, setOwn] = useState<any>(null); // /api/own/analytics 响应（无自有站/拉取失败为 null）
   const [loading, setLoading] = useState(true);
+  const [refreshedAt, setRefreshedAt] = useState<number | null>(null);
 
   const load = useCallback(async (d: number) => {
     try {
       const resp = await api(`/api/analytics?days=${d}`);
       setData(resp);
+      setRefreshedAt(Date.now());
     } catch {
       /* 顶层错误交给下次轮询重试，页面保留旧数据 */
     }
@@ -193,8 +196,10 @@ export default function AnalyticsPage() {
     <PageContainer
       title="经营分析"
       subTitle="上游成本 · 下游收入 · 余额跑道"
-      extra={
+      extra={[
+        <LastRefreshed key="last-refreshed" at={refreshedAt} />,
         <Segmented
+          key="days"
           value={days}
           onChange={(v) => setDays(Number(v))}
           options={[
@@ -202,8 +207,8 @@ export default function AnalyticsPage() {
             { label: "14 天", value: 14 },
             { label: "30 天", value: 30 },
           ]}
-        />
-      }
+        />,
+      ]}
     >
       {/* KPI 行：总成本 / 日均 / 峰值日 / 预计月化 */}
       <Row gutter={[16, 16]}>

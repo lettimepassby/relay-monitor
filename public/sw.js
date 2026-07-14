@@ -1,7 +1,9 @@
 // PWA Service Worker：静态资源网络优先（面板由 Watchtower 自动更新，
 // 不能让旧版本粘在缓存里），断网时回退缓存壳；API 请求不拦截（数据必须新鲜）。
-const CACHE = "relay-monitor-shell-v1";
-const SHELL = ["/", "/styles.css", "/app.js", "/manifest.webmanifest", "/icons/icon-192.png"];
+const CACHE = "relay-monitor-shell-v2";
+// v2（Next.js）：JS/CSS 均为带哈希的 /_next/static 资源，运行时按 fetch 缓存即可，
+// 壳清单只预缓存入口与图标（v1 的 /app.js /styles.css 已不存在）
+const SHELL = ["/", "/manifest.webmanifest", "/icons/icon-192.png"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).catch(() => {}));

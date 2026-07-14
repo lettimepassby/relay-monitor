@@ -23,6 +23,7 @@ import {
 import { PlusOutlined, ReloadOutlined } from "@ant-design/icons";
 import { Bar, Column, Line } from "@ant-design/plots";
 import ChartBox from "../chart-box";
+import LastRefreshed from "../last-refreshed";
 import { api, cny, cny4, fmtTokens, rateOf } from "../../../lib/client";
 import { useThemeMode } from "../../providers";
 
@@ -149,6 +150,7 @@ export default function MyStationPage() {
   const [data, setData] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [refreshedAt, setRefreshedAt] = useState<number | null>(null);
 
   // 转售 Key 管理器状态
   const [mgrOpen, setMgrOpen] = useState(false);
@@ -168,6 +170,7 @@ export default function MyStationPage() {
     if (!force && cached && Date.now() - cached.at < 60000) {
       setData(cached.data);
       setError(null);
+      setRefreshedAt(cached.at);
       return;
     }
     try {
@@ -178,6 +181,7 @@ export default function MyStationPage() {
       if (rangeRef.current !== r) return;
       setData(res);
       setError(null);
+      setRefreshedAt(Date.now());
     } catch (e: any) {
       if (rangeRef.current !== r) return;
       setError(e.message || String(e));
@@ -273,6 +277,7 @@ export default function MyStationPage() {
 
   // ---- 页面头部：范围切换 + 手动刷新（v1 #ownRange / #ownRefresh）----
   const headerExtra = [
+    <LastRefreshed key="refreshed" at={refreshedAt} />,
     <Segmented key="range" options={OWN_RANGES} value={range} onChange={(v) => setRange(String(v))} />,
     <Button key="refresh" icon={<ReloadOutlined />} loading={refreshing} onClick={onRefresh}>
       刷新

@@ -3,6 +3,7 @@
 // 功能与口径逐条对照 v1 app.js：renderDashboard / drawTotalChart / drawBurnBars / stationRow
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PageContainer, ProCard } from "@ant-design/pro-components";
+import LastRefreshed from "./last-refreshed";
 import { App, Button, Col, Empty, Row, Segmented, Tag, Tooltip, Typography, theme } from "antd";
 import { ReloadOutlined } from "@ant-design/icons";
 import { Line, Bar } from "@ant-design/plots";
@@ -149,6 +150,7 @@ export default function OverviewPage() {
   const [overview, setOverview] = useState<{ hours: number; series: any[] } | null>(null);
   const [overviewErr, setOverviewErr] = useState<string | null>(null);
   const [refreshingId, setRefreshingId] = useState<string | null>(null);
+  const [refreshedAt, setRefreshedAt] = useState<number | null>(null);
   const hoursRef = useRef(trendHours);
   hoursRef.current = trendHours;
 
@@ -161,6 +163,7 @@ export default function OverviewPage() {
       setStations(r.stations);
       setSettings(r.settings);
       setLoaded(true);
+      setRefreshedAt(Date.now());
     } catch {
       /* 401 已由 api() 跳登录，其余错误静默等下轮 */
     }
@@ -528,7 +531,7 @@ export default function OverviewPage() {
   }
 
   return (
-    <PageContainer title="总览">
+    <PageContainer title="总览" extra={<LastRefreshed at={refreshedAt} />}>
       {/* 5 张 KPI（renderDashboard stats 区，口径逐项一致） */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 16 }}>
         <StatCard
