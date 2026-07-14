@@ -6,3 +6,9 @@ data/
 
 # 本地工具配置
 .claude/
+# v2 (Next.js)
+.next/
+.env
+.env.local
+next-env.d.ts
+tsconfig.tsbuildinfo

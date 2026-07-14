@@ -1,8 +1,8 @@
-// 简单的 JSON 文件持久化（无需数据库）
-import { readFile, writeFile, mkdir, rename } from "node:fs/promises";
-import { dirname } from "node:path";
-import { hashPassword } from "./auth.js";
-import { DEFAULT_RULES } from "./alerts.js";
+// MySQL 持久化的 Store：公开 API 与 v1（JSON 文件版 lib/store.js）逐字一致。
+// 设计：内存缓存 this.data 保持 v1 数据形状，所有读走内存（同步 getter 不变），
+// 所有写通过 save() 串行化写透 MySQL——消费方（26 个端点/告警/日报）零改动。
+import { hashPassword } from "../lib/auth.js";
+import { DEFAULT_RULES } from "../lib/alerts.js";
 
 const DEFAULT_SETTINGS = {
   refreshIntervalSec: 60, // 后台自动刷新间隔
@@ -55,9 +55,14 @@ function sanitizeResoldKeys(input) {
   return out;
 }
 
+// mysql2 的 JSON 列可能返回已解析对象或字符串，统一成对象
+function asDoc(v) {
+  return typeof v === "string" ? JSON.parse(v) : v;
+}
+
 export class Store {
-  constructor(file) {
-    this.file = file;
+  constructor(pool) {
+    this.pool = pool;
     this.data = {
       stations: [],
       settings: { ...DEFAULT_SETTINGS },
@@ -67,46 +72,23 @@ export class Store {
   }
 
   async load() {
-    let raw = null;
-    try {
-      raw = await readFile(this.file, "utf8");
-    } catch (err) {
-      // 文件不存在（ENOENT）→ 首次启动，走默认值并在末尾创建文件。
-      // 其它读取错误（权限/IO，可能是暂时性的）→ 文件可能仍在，绝不用空默认值覆盖，
-      // 直接中止启动，交由运维排查后重启，避免销毁现有站点令牌/密码。
-      if (err.code !== "ENOENT") {
-        throw new Error(
-          `读取数据文件失败（${err.code}）：${err.message}。已中止启动以避免覆盖现有数据，请排查后重启。`
-        );
-      }
-    }
-    if (raw != null) {
-      let parsed;
-      try {
-        parsed = JSON.parse(raw);
-      } catch (err) {
-        // 文件已损坏：绝不静默退默认值再在末尾 save() 覆盖——那会永久销毁含令牌/密码的凭证。
-        // 先把原始内容备份为带时间戳的副本，再中止启动；原文件保持不动，
-        // 运维修复或删除 stations.json 后重启即可（重启前不会有任何写覆盖）。
-        const backup = `${this.file}.corrupt-${Date.now()}`;
-        await writeFile(backup, raw, { mode: 0o600 }).catch(() => {});
-        throw new Error(
-          `数据文件损坏，无法解析（${err.message}）。原始内容已备份为 ${backup}。` +
-          `已中止启动以避免覆盖凭证，请修复或删除 ${this.file} 后重启。`
-        );
-      }
-      this.data = {
-        stations: Array.isArray(parsed.stations) ? parsed.stations : [],
-        settings: { ...DEFAULT_SETTINGS, ...(parsed.settings || {}) },
-        auth: parsed.auth || null,
-        notifications: {
-          channels: Array.isArray(parsed.notifications?.channels) ? parsed.notifications.channels : [],
-          rules: { ...DEFAULT_RULES, ...(parsed.notifications?.rules || {}) },
-        },
-      };
-    }
+    // DB 读取失败（连接/权限/损坏）→ 直接抛错中止启动，绝不带着空状态运行
+    //（那会在首次 save() 时覆盖掉现有站点凭证——与 v1.15.1 的保护语义一致）
+    // pos 保持 v1 的数组插入顺序（created_at 在批量迁移时同秒，排序不稳定）
+    const [stationRows] = await this.pool.query("SELECT id, doc FROM stations ORDER BY pos, created_at");
+    const [metaRows] = await this.pool.query("SELECT k, v FROM meta WHERE k IN ('settings','auth','notifications')");
+    const meta = Object.fromEntries(metaRows.map((r) => [r.k, asDoc(r.v)]));
+    this.data = {
+      stations: stationRows.map((r) => asDoc(r.doc)),
+      settings: { ...DEFAULT_SETTINGS, ...(meta.settings || {}) },
+      auth: meta.auth || null,
+      notifications: {
+        channels: Array.isArray(meta.notifications?.channels) ? meta.notifications.channels : [],
+        rules: { ...DEFAULT_RULES, ...(meta.notifications?.rules || {}) },
+      },
+    };
     // 迁移：历代固定成本字段（fixedMonthlyCny / fixedCostCny+fixedDays+fixedStartDate）
-    // 统一为付费记录数组 fixedPurchases
+    // 统一为付费记录数组 fixedPurchases（v1 老数据经 db/migrate.js 导入时同样适用）
     for (const s of this.data.stations) {
       if (!Array.isArray(s.fixedPurchases)) {
         s.fixedPurchases = [];
@@ -132,7 +114,7 @@ export class Store {
     return this;
   }
 
-  // 串行化写盘（并行刷新会同时触发 save），临时文件 + rename 保证原子性
+  // 串行化写透（并行刷新会同时触发 save）；事务保证 stations+meta 原子落库
   save() {
     this._saveChain = (this._saveChain || Promise.resolve())
       .then(() => this._writeNow())
@@ -141,10 +123,36 @@ export class Store {
   }
 
   async _writeNow() {
-    await mkdir(dirname(this.file), { recursive: true });
-    const tmp = this.file + ".tmp";
-    await writeFile(tmp, JSON.stringify(this.data, null, 2), { mode: 0o600 });
-    await rename(tmp, this.file);
+    const conn = await this.pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const ids = this.data.stations.map((s) => s.id);
+      if (ids.length) {
+        await conn.query("DELETE FROM stations WHERE id NOT IN (?)", [ids]);
+        const values = this.data.stations.map((s, i) => [s.id, i, JSON.stringify(s)]);
+        await conn.query(
+          "INSERT INTO stations (id, pos, doc) VALUES ? ON DUPLICATE KEY UPDATE pos = VALUES(pos), doc = VALUES(doc)",
+          [values]
+        );
+      } else {
+        await conn.query("DELETE FROM stations");
+      }
+      const metas = [
+        ["settings", JSON.stringify(this.data.settings)],
+        ["auth", JSON.stringify(this.data.auth)],
+        ["notifications", JSON.stringify(this.data.notifications)],
+      ];
+      await conn.query(
+        "INSERT INTO meta (k, v) VALUES ? ON DUPLICATE KEY UPDATE v = VALUES(v)",
+        [metas]
+      );
+      await conn.commit();
+    } catch (err) {
+      await conn.rollback().catch(() => {});
+      throw err;
+    } finally {
+      conn.release();
+    }
   }
 
   // ---- 设置 ------------------------------------------------------------------
