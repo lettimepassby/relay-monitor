@@ -608,6 +608,14 @@ function renderNotify() {
         <div class="field-inline"><input class="input small" id="rule-renotify" value="${r.renotifyHours ?? 24}"><span class="set-desc">小时</span></div>
       </div>
       <div class="set-row">
+        <div><div class="set-title">失败通知阈值</div><div class="set-desc">查询连续失败达到该次数才推送「查询失败」（1 = 首次失败即通知）</div></div>
+        <div class="field-inline"><input class="input small" id="rule-errThreshold" value="${r.errorThreshold ?? 1}"><span class="set-desc">次</span></div>
+      </div>
+      <div class="set-row">
+        <div><div class="set-title">失败快速重试</div><div class="set-desc">查询失败后隔 N 秒立即重试一次以尽快确认，不必等下次轮询（0 = 关闭）</div></div>
+        <div class="field-inline"><input class="input small" id="rule-errRetry" value="${r.errorRetrySec ?? 30}"><span class="set-desc">秒</span></div>
+      </div>
+      <div class="set-row">
         <div><div class="set-title">保存规则</div><div class="set-desc">应用阈值与间隔修改</div></div>
         <button class="btn btn-primary" id="rulesSave">保存</button>
       </div>
@@ -1801,11 +1809,15 @@ $(".main").addEventListener("click", async (e) => {
         etaDays: unit === "hours" ? val / 24 : val, // 内部统一按天
         etaUnit: unit,
         renotifyHours: Number($("#rule-renotify").value),
+        errorThreshold: Number($("#rule-errThreshold").value),
+        errorRetrySec: Number($("#rule-errRetry").value),
       });
       state.rules = r.rules;
       // 回显服务端钳制后的值（如非法输入被忽略、下限 1 小时），不然界面显示的是没生效的输入
       $("#rule-etaVal").value = etaRuleDisplay(state.rules);
       $("#rule-renotify").value = state.rules.renotifyHours;
+      $("#rule-errThreshold").value = state.rules.errorThreshold;
+      $("#rule-errRetry").value = state.rules.errorRetrySec;
       toast("规则已保存");
     } catch (err) { toast(err.message, "err"); }
     return;

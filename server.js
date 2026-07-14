@@ -272,6 +272,31 @@ function refreshOne(station) {
   return p;
 }
 
+// 查询失败后的快速重试：不等下一次轮询（可能是几分钟），隔 errorRetrySec 秒再探一次，
+// 好尽快累积「连续失败」次数、达到通知阈值。只在仍失败且未达阈值时续排，天然自限。
+const errorRetryTimers = new Map();
+function scheduleErrorRetry(station) {
+  const old = errorRetryTimers.get(station.id);
+  if (old) { clearTimeout(old); errorRetryTimers.delete(station.id); }
+
+  const r = store.rules || {};
+  const delaySec = Number(r.errorRetrySec);
+  if (!Number.isFinite(delaySec) || delaySec <= 0) return; // 0/未配置 = 关闭快速重试
+
+  const failing = station.balance && !station.balance.ok;
+  const threshold = Math.max(1, Math.floor(Number(r.errorThreshold) || 1));
+  const count = station.alertState?.errorCount || 0;
+  if (!failing || count >= threshold) return; // 已恢复或已达阈值（已通知）就交回常规轮询
+
+  const t = setTimeout(() => {
+    errorRetryTimers.delete(station.id);
+    const cur = store.get(station.id); // 期间可能已被删除
+    if (cur) refreshOne(cur).catch(() => {});
+  }, delaySec * 1000);
+  if (t.unref) t.unref();
+  errorRetryTimers.set(station.id, t);
+}
+
 async function doRefreshOne(station) {
   const { result } = await queryStation(station);
   // 查询在途期间站点可能已被删除：丢弃结果，避免复活历史记录或发幽灵告警
@@ -291,6 +316,7 @@ async function doRefreshOne(station) {
   }
 
   await store.save(); // balance / s2Tokens / alertState 一并落盘
+  scheduleErrorRetry(station); // 失败未达阈值则安排一次快速重试
   return result;
 }
 
