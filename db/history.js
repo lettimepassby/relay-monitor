@@ -1,42 +1,67 @@
-// 余额历史快照 + 耗尽预测（线性回归）
-import { readFile, writeFile, mkdir, rename } from "node:fs/promises";
-import { dirname } from "node:path";
-
+// 余额历史快照 + 耗尽预测：算法与 v1（lib/history.js）逐字一致。
+// 持久层从 JSON 文件换成 MySQL history_points 表：内存缓存全量热数据（30 天），
+// append 写内存 + 攒批写透 DB；usedSince/burnRate/predict 读内存，语义不变。
+// 落表的关系行同时供「经营分析」页做 SQL 聚合（热力图/趋势等）。
 const MAX_POINTS = 5000; // 每站上限
 const MAX_AGE_MS = 30 * 24 * 3600 * 1000; // 保留 30 天
 const MIN_GAP_MS = 30 * 1000; // 相邻快照最小间隔
 const TOPUP_EPSILON = 0.05; // 余额上升超过该值视为充值，回归只取充值之后的段
 
 export class History {
-  constructor(file) {
-    this.file = file;
+  constructor(pool) {
+    this.pool = pool;
     // { stationId: [[t, remaining, used], ...] } 按时间升序
     this.data = {};
     this._saveTimer = null;
+    this._pending = []; // 待写透的行 [stationId, t, remaining, used]
+    this._removed = new Set(); // 待删除的站点
   }
 
   async load() {
-    try {
-      this.data = JSON.parse(await readFile(this.file, "utf8"));
-      if (typeof this.data !== "object" || !this.data) this.data = {};
-    } catch {
-      this.data = {};
+    // 只载入保留窗口内的点；DB 错误直接抛出中止启动（不静默吞掉）
+    const cutoff = Date.now() - MAX_AGE_MS;
+    const [rows] = await this.pool.query(
+      "SELECT station_id, t, remaining, used FROM history_points WHERE t >= ? ORDER BY station_id, t",
+      [cutoff]
+    );
+    this.data = {};
+    for (const r of rows) {
+      (this.data[r.station_id] ||= []).push([Number(r.t), r.remaining, r.used]);
+    }
+    // 内存热态与 v1 语义一致：每站只留最近 MAX_POINTS 个点（端点返回逐点一致）；
+    // DB 里保留完整 30 天，供经营分析 SQL 聚合使用
+    for (const id of Object.keys(this.data)) {
+      const arr = this.data[id];
+      if (arr.length > MAX_POINTS) this.data[id] = arr.slice(arr.length - MAX_POINTS);
     }
     return this;
   }
 
-  // 合并写盘，避免每 60 秒全量写多次；临时文件 + rename 原子替换，
-  // 进程在写一半时被杀不会留下损坏的 history.json
+  // 合并写透，避免每 60 秒逐行写多次；失败重试交给下一批（内存仍是权威热态）
   scheduleSave() {
     if (this._saveTimer) return;
     this._saveTimer = setTimeout(async () => {
       this._saveTimer = null;
+      const batch = this._pending; this._pending = [];
+      const removed = [...this._removed]; this._removed.clear();
       try {
-        await mkdir(dirname(this.file), { recursive: true });
-        const tmp = this.file + ".tmp";
-        await writeFile(tmp, JSON.stringify(this.data), "utf8");
-        await rename(tmp, this.file);
-      } catch {}
+        if (removed.length) {
+          await this.pool.query("DELETE FROM history_points WHERE station_id IN (?)", [removed]);
+        }
+        if (batch.length) {
+          await this.pool.query(
+            "INSERT IGNORE INTO history_points (station_id, t, remaining, used) VALUES ?",
+            [batch]
+          );
+        }
+        // 裁剪窗口外旧数据（与内存裁剪同一口径）
+        await this.pool.query("DELETE FROM history_points WHERE t < ?", [Date.now() - MAX_AGE_MS]);
+      } catch (err) {
+        // 写透失败：把批次放回队列，等下一次 scheduleSave 重试
+        this._pending.unshift(...batch);
+        for (const id of removed) this._removed.add(id);
+        console.error("历史写库失败:", err?.message);
+      }
     }, 1500);
   }
 
@@ -46,7 +71,9 @@ export class History {
     const now = Date.now();
     const last = arr[arr.length - 1];
     if (last && now - last[0] < MIN_GAP_MS) return;
-    arr.push([now, Math.round(remaining * 10000) / 10000, Math.round((used || 0) * 10000) / 10000]);
+    const point = [now, Math.round(remaining * 10000) / 10000, Math.round((used || 0) * 10000) / 10000];
+    arr.push(point);
+    this._pending.push([stationId, point[0], point[1], point[2]]);
     // 裁剪
     const cutoff = now - MAX_AGE_MS;
     while (arr.length > MAX_POINTS || (arr.length && arr[0][0] < cutoff)) arr.shift();
@@ -55,6 +82,7 @@ export class History {
 
   remove(stationId) {
     delete this.data[stationId];
+    this._removed.add(stationId);
     this.scheduleSave();
   }
 
