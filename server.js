@@ -6,6 +6,7 @@ import { readFile } from "node:fs/promises";
 import { Store } from "./lib/store.js";
 import {
   queryStation, queryStationUsage, queryOwnData, queryOwnChannels, queryOwnUsers,
+  queryAdminTokens, queryLogStat,
   dateStrInTz, parseDateLabel, fixedPurchases, STATION_TYPES,
 } from "./lib/providers.js";
 import { forecastDaily, forecastHourly } from "./lib/forecast.js";
@@ -614,8 +615,12 @@ app.get("/api/own/analytics", async (req, res) => {
 
     const byUser = aggBy(userRows, "user").map((u) => ({ ...u, isAdmin: adminSet.has(u.user) }));
     // 收入 = 普通用户的期内消费；管理员/root 自己用不产生收入，但上游成本照付
-    const incomeUsd = byUser.filter((u) => !u.isAdmin).reduce((a, u) => a + u.cost, 0);
-    const adminUsageUsd = byUser.filter((u) => u.isAdmin).reduce((a, u) => a + u.cost, 0);
+    const rawIncomeUsd = byUser.filter((u) => !u.isAdmin).reduce((a, u) => a + u.cost, 0);
+    const rawAdminUsd = byUser.filter((u) => u.isAdmin).reduce((a, u) => a + u.cost, 0);
+    // 转售的管理员 Key：其消费改计入收入（详见 computeResold）
+    const resold = await computeResold(own, rawIncomeUsd, rawAdminUsd, startMs, now);
+    const incomeUsd = resold.incomeUsd;
+    const adminUsageUsd = resold.adminUsageUsd;
 
     const payload = {
       range, tz, startMs, endMs: now,
@@ -632,7 +637,7 @@ app.get("/api/own/analytics", async (req, res) => {
       daily: daily.slice(-14),
       forecast: forecastDaily(daily, 7),
       hourly: hourlyForecast,
-      profit: await computeProfit(own, incomeUsd, adminUsageUsd, { startMs, now, tz, range }),
+      profit: await computeProfit(own, incomeUsd, adminUsageUsd, { startMs, now, tz, range, resold }),
       generatedAt: new Date().toISOString(),
     };
     ownCache.set(cacheKey, { at: Date.now(), payload });
@@ -651,8 +656,85 @@ async function getOwnUsers(own) {
   return ownUsersCache.list;
 }
 
+// ---- 管理员/root API Key 转售标记 ---------------------------------------------
+// 列出所有管理员/root 账号（role>=10）名下的 API Key，标注哪些已被标记为转售。
+app.get("/api/own/admin-keys", async (req, res) => {
+  const own = store.list().find((s) => s.isOwn && s.type === "newapi");
+  if (!own) return res.status(400).json({ error: "还没有标记「我的中转站」（需 New API 管理员令牌）" });
+  try {
+    const users = await getOwnUsers(own);
+    const admins = (users || []).filter((u) => u.role >= 10);
+    const resold = own.resoldAdminKeys || [];
+    const flagged = new Set(resold.map((k) => `${k.username} ${k.tokenName}`));
+    const accounts = [];
+    for (const u of admins) {
+      // new-api 的 /api/token/ 只能列「当前登录账号」名下的 Key，无法用 New-Api-User
+      // 越权枚举其它账号（如 root）；此时 enumerable=false，前端退回手动填 Key 名。
+      try {
+        const tokens = (await queryAdminTokens(own, u.id)).map((t) => ({
+          name: t.name,
+          status: t.status,
+          usedUsd: Math.round(t.usedUsd * 100) / 100,
+          flagged: flagged.has(`${u.username} ${t.name}`),
+        }));
+        accounts.push({ username: u.username, role: u.role, enumerable: true, tokens: tokens.sort((a, b) => b.usedUsd - a.usedUsd) });
+      } catch (err) {
+        // 无法枚举：仍回显该账号已标记的 Key，让用户能看到/取消
+        const names = resold.filter((k) => k.username === u.username).map((k) => k.tokenName);
+        accounts.push({
+          username: u.username, role: u.role, enumerable: false,
+          error: err?.message || String(err),
+          tokens: names.map((name) => ({ name, flagged: true, usedUsd: null })),
+        });
+      }
+    }
+    res.json({ accounts });
+  } catch (err) {
+    res.status(502).json({ error: err?.message || String(err) });
+  }
+});
+
+// 保存转售 Key 标记：body { keys: [{username, tokenName}] }
+app.put("/api/own/admin-keys", async (req, res) => {
+  const own = store.list().find((s) => s.isOwn && s.type === "newapi");
+  if (!own) return res.status(400).json({ error: "还没有标记「我的中转站」" });
+  const keys = Array.isArray(req.body?.keys) ? req.body.keys : [];
+  await store.update(own.id, { resoldAdminKeys: keys });
+  ownCache.clear(); // 影响利润口径，清缓存让下次分析重算
+  res.json({ resoldAdminKeys: own.resoldAdminKeys });
+});
+
 // 渠道列表拉取开销不小，缓存 10 分钟
 let ownChannelsCache = { at: 0, stationId: null, list: null };
+
+/**
+ * 转售的管理员/root Key 消费重归：从「管理员消耗（成本）」移入「下游收入」。
+ * 对每个 (username, tokenName) 用日志统计接口取窗内消费额度（美元）后汇总。
+ * 单个 Key 查询失败记为 0 并附带错误，不影响其余；返回调整后的两个口径 + 明细。
+ */
+async function computeResold(own, incomeUsd, adminUsageUsd, startMs, endMs) {
+  const keys = Array.isArray(own.resoldAdminKeys) ? own.resoldAdminKeys : [];
+  if (!keys.length) return { incomeUsd, adminUsageUsd, resoldUsd: 0, breakdown: [] };
+  const breakdown = [];
+  let resoldUsd = 0;
+  await Promise.all(keys.map(async (k) => {
+    try {
+      const usd = await queryLogStat(own, { username: k.username, tokenName: k.tokenName, startMs, endMs });
+      resoldUsd += usd;
+      breakdown.push({ username: k.username, tokenName: k.tokenName, usd: Math.round(usd * 10000) / 10000 });
+    } catch (err) {
+      breakdown.push({ username: k.username, tokenName: k.tokenName, usd: 0, error: err?.message || String(err) });
+    }
+  }));
+  resoldUsd = Math.round(resoldUsd * 10000) / 10000;
+  return {
+    incomeUsd: incomeUsd + resoldUsd,
+    // 转售消费本在管理员桶里，移走它；跨接口口径微差时钳到 0，避免负数
+    adminUsageUsd: Math.max(0, adminUsageUsd - resoldUsd),
+    resoldUsd,
+    breakdown: breakdown.sort((a, b) => b.usd - a.usd),
+  };
+}
 
 /**
  * 利润 = 收入（下游消费 × 自有站售价汇率）− 成本（各匹配上游的期内成本）
@@ -660,7 +742,7 @@ let ownChannelsCache = { at: 0, stationId: null, list: null };
  * 否则按上游用量接口的实际扣费 × 充值汇率；用量接口不可用时退回余额下降推算。
  * 渠道按 base_url 与监控站点匹配（忽略协议/末尾斜杠/是否带 /api）。
  */
-async function computeProfit(own, incomeUsd, adminUsageUsd, { startMs, now, tz, range }) {
+async function computeProfit(own, incomeUsd, adminUsageUsd, { startMs, now, tz, range, resold }) {
   const r2 = (v) => Math.round(v * 100) / 100;
   try {
     if (!ownChannelsCache.list || ownChannelsCache.stationId !== own.id || Date.now() - ownChannelsCache.at > 600000) {
@@ -766,6 +848,9 @@ async function computeProfit(own, incomeUsd, adminUsageUsd, { startMs, now, tz, 
     return {
       incomeCny, totalCostCny,
       adminUsageCny: r2((adminUsageUsd || 0) * ownRate),
+      // 转售管理员 Key 计入收入的部分（× 售价汇率），供前端拆分展示
+      resoldCny: resold ? r2((resold.resoldUsd || 0) * ownRate) : 0,
+      resoldKeys: resold ? resold.breakdown.map((b) => ({ ...b, cny: r2(b.usd * ownRate) })) : [],
       profitCny: r2(incomeCny - totalCostCny),
       marginPct: incomeCny > 0 ? Math.round(((incomeCny - totalCostCny) / incomeCny) * 1000) / 10 : null,
       costs: costs.sort((a, b) => b.cny - a.cny),
@@ -828,11 +913,15 @@ async function buildDailyReport() {
   const totalCost = byModel.reduce((a, m) => a + m.cost, 0);
   const totalTokens = byModel.reduce((a, m) => a + m.tokens, 0);
   const totalReqs = byModel.reduce((a, m) => a + m.requests, 0);
-  const incomeUsd = byUser.filter((u) => !u.isAdmin).reduce((a, u) => a + u.cost, 0);
-  const adminUsd = byUser.filter((u) => u.isAdmin).reduce((a, u) => a + u.cost, 0);
+  const rawIncomeUsd = byUser.filter((u) => !u.isAdmin).reduce((a, u) => a + u.cost, 0);
+  const rawAdminUsd = byUser.filter((u) => u.isAdmin).reduce((a, u) => a + u.cost, 0);
+  // 转售的管理员 Key 消费改计入收入（与「我的站点」页口径一致）
+  const resold = await computeResold(own, rawIncomeUsd, rawAdminUsd, dayStart, dayEnd);
+  const incomeUsd = resold.incomeUsd;
+  const adminUsd = resold.adminUsageUsd;
 
   // 昨日利润（成本窗口 = 昨日自然日）
-  const profit = await computeProfit(own, incomeUsd, adminUsd, { startMs: dayStart, now: dayEnd, tz, range: "7d" });
+  const profit = await computeProfit(own, incomeUsd, adminUsd, { startMs: dayStart, now: dayEnd, tz, range: "7d", resold });
 
   // 日序列（近 34 天，不含今天）→ 环比与预测
   const dmap = new Map();

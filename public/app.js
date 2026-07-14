@@ -56,6 +56,8 @@ const api = {
   overview: (hours) => call(`/api/history/overview?hours=${hours}`),
   usage: (range) => call(`/api/usage?range=${range}&tz=${encodeURIComponent(Intl.DateTimeFormat().resolvedOptions().timeZone)}`),
   ownAnalytics: (range) => call(`/api/own/analytics?range=${range}&tz=${encodeURIComponent(Intl.DateTimeFormat().resolvedOptions().timeZone)}`),
+  ownAdminKeys: () => call("/api/own/admin-keys"),
+  saveOwnAdminKeys: (keys) => call("/api/own/admin-keys", { method: "PUT", body: { keys } }),
   saveSettings: (b) => call("/api/settings", { method: "PUT", body: b }),
   notifications: () => call("/api/notifications"),
   addChannel: (b) => call("/api/notifications/channels", { body: b }),
@@ -1189,21 +1191,91 @@ function profitSection(p) {
         </div>
         <div class="st-balance"><div class="sub">${u.enabled}/${u.total} 个渠道启用</div></div>
       </div>`).join("")}</div>` : "";
+  const resoldCny = p.resoldCny || 0;
+  const incomeSub = [
+    resoldCny > 0 ? `含转售管理员 Key ${cny(resoldCny)}` : "",
+    p.adminUsageCny > 0 ? `管理员自用 ${cny(p.adminUsageCny)}（计成本不计收入）` : "",
+  ].filter(Boolean).join(" · ");
   return `
     <div class="section-head" data-toc="利润分析"><h2>利润分析</h2>
-      <span class="muted">收入 = 普通用户消费 × 售价汇率（不含管理员/root）· 成本按各上游口径（窗口 ${p.windowDays} 天）</span></div>
+      <span class="muted">收入 = 普通用户消费 × 售价汇率（不含管理员/root，除非该 Key 已标为转售）· 成本按各上游口径（窗口 ${p.windowDays} 天）</span></div>
     <div class="stats" style="grid-template-columns:repeat(4,1fr)">
       <div class="stat-card"><div class="label">期内收入</div><div class="value">${cny(p.incomeCny)}</div>${
-        p.adminUsageCny > 0 ? `<div class="stat-sub">管理员另消耗 ${cny(p.adminUsageCny)}（计成本不计收入）</div>` : ""
+        incomeSub ? `<div class="stat-sub">${incomeSub}</div>` : ""
       }</div>
       <div class="stat-card"><div class="label">期内成本</div><div class="value">${cny(p.totalCostCny)}</div></div>
       <div class="stat-card"><div class="label">利润</div><div class="value ${profitCls}">${cny(p.profitCny)}</div></div>
       <div class="stat-card"><div class="label">利润率</div><div class="value ${profitCls}">${p.marginPct != null ? p.marginPct + "%" : "—"}</div></div>
     </div>
+    ${resoldSection(p)}
     ${p.costs.length ? `<div class="panel" style="margin-bottom:14px">${costRows}</div>`
       : '<div class="usage-errors" style="margin-bottom:14px"><span>没有渠道能匹配到监控中的站点（按 URL 比对），成本暂计 ¥0</span></div>'}
     ${unmatchedRows}
     <div class="section-head" style="margin-top:16px" data-toc="用量图表"><h2>用量分析</h2></div>`;
+}
+
+// 转售管理员 Key 区块：已标记 Key 的收入明细 + 打开管理器按钮
+function resoldSection(p) {
+  const rows = (p.resoldKeys || []).map((k) => `
+    <div class="st-row profit-row">
+      <div class="st-main" style="cursor:default">
+        <div class="st-name">${esc(k.username)} / ${esc(k.tokenName)}${
+          k.error ? ` <span class="demo-tag tag-warn">查询失败</span>` : ""
+        }</div>
+        <div class="st-meta">${k.error ? esc(k.error) : "转售给下游 · 计入收入"}</div>
+      </div>
+      <div class="st-balance"><div class="amt">${cny(k.cny || 0)}</div><div class="sub">期内收入</div></div>
+    </div>`).join("");
+  return `
+    <div class="section-head" style="margin-top:16px" data-toc="转售 Key">
+      <h2>管理员转售 Key</h2>
+      <button class="btn btn-ghost" id="manageResold">管理转售 Key</button></div>
+    ${rows ? `<div class="panel" style="margin-bottom:14px">${rows}</div>`
+      : `<div class="usage-errors" style="margin-bottom:14px"><span>还没有标记转售 Key。若某个管理员/root 账号的 API Key 实际给了下游，点「管理转售 Key」勾选它，其消费即计入收入。</span></div>`}
+    <div id="resoldManager"></div>`;
+}
+
+// 渲染转售 Key 管理器：按管理员账号分组，逐个 Key 复选
+function renderResoldManager(box, accounts) {
+  const ROLE = { 10: "管理员", 100: "root" };
+  if (!accounts || !accounts.length) {
+    box.innerHTML = `<div class="usage-errors" style="margin-bottom:14px"><span>没有找到管理员/root 账号（role ≥ 10）。</span></div>`;
+    return;
+  }
+  const rate = rateOf(state.ownData.station);
+  const keyRow = (user, name, checked, usedUsd) => `
+    <label class="resold-key">
+      <input type="checkbox" data-user="${esc(user)}" data-token="${esc(name)}" ${checked ? "checked" : ""}>
+      <span class="resold-key-name">${esc(name) || "（未命名）"}</span>
+      ${usedUsd != null ? `<span class="resold-key-used">累计用 ${cny(usedUsd * rate)}</span>` : ""}
+    </label>`;
+  const groups = accounts.map((a) => {
+    const head = `<div class="st-name" style="margin:2px 0 8px">${esc(a.username)} <span class="demo-tag">${ROLE[a.role] || "role " + a.role}</span></div>`;
+    // 可枚举：直接列出所有 Key 复选
+    if (a.enumerable) {
+      if (!a.tokens.length) return `<div class="resold-group">${head}<div class="st-meta">该账号没有 API Key</div></div>`;
+      return `<div class="resold-group">${head}${a.tokens.map((t) => keyRow(a.username, t.name, t.flagged, t.usedUsd)).join("")}</div>`;
+    }
+    // 不可枚举（如 root，接口不允许越权列 Key）：回显已标记的 + 手动填 Key 名
+    const existing = a.tokens.map((t) => keyRow(a.username, t.name, true, null)).join("");
+    return `<div class="resold-group" data-acct="${esc(a.username)}">
+      ${head}
+      <div class="st-meta" style="margin-bottom:6px">此账号无法自动列出 Key（${esc(a.error || "接口限制")}）。若它有转售 Key，请手动填 Key 名：</div>
+      <div class="resold-keys">${existing}</div>
+      <div class="resold-add">
+        <input class="input small" placeholder="Key 名（token_name）" data-addfor="${esc(a.username)}">
+        <button class="btn btn-ghost" data-resold-add="${esc(a.username)}">添加</button>
+      </div>
+    </div>`;
+  }).join("");
+  box.innerHTML = `
+    <div class="panel" style="margin-bottom:14px;padding:16px">
+      <div class="st-meta" style="margin-bottom:10px">勾选实际转售给下游的 Key，其期内消费将从「管理员自用（成本）」改计入「收入 × 售价汇率」。Key 名可能跨账号重名，故按「账号 + Key 名」定位。</div>
+      ${groups}
+      <div style="margin-top:12px;display:flex;gap:8px">
+        <button class="btn btn-primary" id="resoldSave">保存并重算</button>
+      </div>
+    </div>`;
 }
 
 // 分用户消费横向条形图（¥）
@@ -1787,6 +1859,52 @@ $(".main").addEventListener("click", async (e) => {
   if (oRefresh) {
     oRefresh.classList.add("spin");
     loadOwn(true).finally(() => oRefresh.classList.remove("spin"));
+    return;
+  }
+
+  // 管理员转售 Key：打开管理器 / 收起 / 保存
+  if (e.target.closest("#manageResold")) {
+    const box = $("#resoldManager");
+    if (box.dataset.open === "1") { box.dataset.open = "0"; box.innerHTML = ""; return; }
+    box.dataset.open = "1";
+    box.innerHTML = `<div class="panel" style="margin-bottom:14px"><div class="empty" style="padding:20px">正在拉取管理员账号的 Key…</div></div>`;
+    try {
+      const { accounts } = await api.ownAdminKeys();
+      renderResoldManager(box, accounts);
+    } catch (err) {
+      box.innerHTML = `<div class="usage-errors" style="margin-bottom:14px"><span>⚠ 拉取失败：${esc(err.message)}</span></div>`;
+    }
+    return;
+  }
+  const addBtn = e.target.closest("[data-resold-add]");
+  if (addBtn) {
+    const user = addBtn.dataset.resoldAdd;
+    const input = document.querySelector(`input[data-addfor="${CSS.escape(user)}"]`);
+    const name = (input?.value || "").trim();
+    if (!name) return;
+    const list = addBtn.closest(".resold-group").querySelector(".resold-keys");
+    // 已存在则不重复添加
+    if (![...list.querySelectorAll("input")].some((c) => c.dataset.token === name)) {
+      const label = document.createElement("label");
+      label.className = "resold-key";
+      label.innerHTML = `<input type="checkbox" data-user="${esc(user)}" data-token="${esc(name)}" checked>
+        <span class="resold-key-name">${esc(name)}</span>`;
+      list.appendChild(label);
+    }
+    input.value = "";
+    return;
+  }
+  if (e.target.closest("#resoldSave")) {
+    const keys = [...document.querySelectorAll("#resoldManager input[type=checkbox]:checked")]
+      .map((c) => ({ username: c.dataset.user, tokenName: c.dataset.token }));
+    const btn = e.target.closest("#resoldSave");
+    btn.disabled = true;
+    try {
+      await api.saveOwnAdminKeys(keys);
+      toast(`已保存 ${keys.length} 个转售 Key，正在重算利润…`);
+      $("#resoldManager").dataset.open = "0";
+      await loadOwn(true);
+    } catch (err) { toast(err.message, "err"); btn.disabled = false; }
     return;
   }
 
