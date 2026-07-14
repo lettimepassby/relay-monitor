@@ -3,11 +3,26 @@
 // 功能与口径逐条对照 v1 app.js：renderDashboard / drawTotalChart / drawBurnBars / stationRow
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PageContainer, ProCard } from "@ant-design/pro-components";
-import { App, Button, Col, Empty, Row, Segmented, Spin, Tag, Tooltip, theme } from "antd";
+import { App, Button, Col, Empty, Row, Segmented, Tag, Tooltip, Typography, theme } from "antd";
 import { ReloadOutlined } from "@ant-design/icons";
 import { Line, Bar } from "@ant-design/plots";
 import { api, cny, usd, rateOf, fmtTokens, fmtEta, statusOf } from "../../lib/client";
 import { useThemeMode } from "../providers";
+
+const { Text } = Typography;
+
+// 图表本体统一固定高度（全站规范：同排卡片等高）
+const CHART_H = 300;
+
+// 图表卡统一两行头：标题一行 + 副标题换行放下方（全站规范，解决标题副标题拥挤）
+function CardTitle({ title, sub }: { title: string; sub: string }) {
+  return (
+    <div>
+      <div style={{ fontWeight: 600 }}>{title}</div>
+      <Text type="secondary" style={{ fontSize: 12, fontWeight: "normal", whiteSpace: "normal" }}>{sub}</Text>
+    </div>
+  );
+}
 
 // ---- v1 工具函数平移（app.js 同名实现，行为逐字对齐）------------------------
 
@@ -92,10 +107,11 @@ function SparkSvg({ pts }: { pts: [number, number][] | null }) {
 function StatCard({ label, value, valueColor, sub }: { label: string; value: React.ReactNode; valueColor?: string; sub?: React.ReactNode }) {
   const { token } = theme.useToken();
   return (
-    <ProCard>
+    <ProCard style={{ height: "100%" }}>
       <div style={{ fontSize: 13, color: token.colorTextSecondary }}>{label}</div>
       <div style={{ fontSize: 26, fontWeight: 600, lineHeight: 1.4, color: valueColor }}>{value}</div>
-      {sub ? <div style={{ fontSize: 12, color: token.colorTextSecondary, marginTop: 2 }}>{sub}</div> : null}
+      {/* 副行统一占位：有的卡带副行有的不带，不占位会高低不齐（全站规范） */}
+      <div style={{ minHeight: 20, fontSize: 12, color: token.colorTextSecondary, marginTop: 2 }}>{sub || null}</div>
     </ProCard>
   );
 }
@@ -104,7 +120,7 @@ function StatCard({ label, value, valueColor, sub }: { label: string; value: Rea
 function ChartEmpty({ text }: { text: string }) {
   const { token } = theme.useToken();
   return (
-    <div style={{ height: 240, display: "flex", alignItems: "center", justifyContent: "center", color: token.colorTextSecondary, fontSize: 13 }}>
+    <div style={{ height: CHART_H, display: "flex", alignItems: "center", justifyContent: "center", color: token.colorTextSecondary, fontSize: 13 }}>
       {text}
     </div>
   );
@@ -425,7 +441,7 @@ export default function OverviewPage() {
     data: trend.data,
     xField: "date",
     yField: "v",
-    height: 260,
+    height: CHART_H,
     theme: dark ? "classicDark" : "classic",
     style: { stroke: token.colorPrimary, lineWidth: 2 },
     axis: {
@@ -463,7 +479,8 @@ export default function OverviewPage() {
     data: burnItems,
     xField: "name",
     yField: "burn",
-    height: Math.max(200, burnItems.length * 40 + 40),
+    // 与总余额趋势同高，保证同排两卡等高；站点少时条形由 G2 自适应带宽，图仍占满高度
+    height: CHART_H,
     theme: dark ? "classicDark" : "classic",
     // 单一色相：对比的是数值不是身份（同 v1 drawBurnBars 注释）
     style: { fill: token.colorPrimary, radiusTopRight: 4, radiusBottomRight: 4 },
@@ -497,9 +514,14 @@ export default function OverviewPage() {
   } : null;
 
   if (!loaded) {
+    // 初次加载统一 ProCard 骨架屏（全站规范：不要转圈文字）
     return (
       <PageContainer title="总览">
-        <div style={{ display: "flex", justifyContent: "center", padding: 80 }}><Spin /></div>
+        <Row gutter={[16, 16]}>
+          <Col xs={24} lg={14}><ProCard loading style={{ height: "100%" }} /></Col>
+          <Col xs={24} lg={10}><ProCard loading style={{ height: "100%" }} /></Col>
+        </Row>
+        <ProCard loading style={{ marginTop: 16 }} />
       </PageContainer>
     );
   }
@@ -536,9 +558,11 @@ export default function OverviewPage() {
         <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
           <Col xs={24} lg={14}>
             <ProCard
-              // 标题不换行不收缩，避免 ~800px 时被 extra 挤成竖排；副标题允许换行
-              title={<span style={{ whiteSpace: "nowrap", flexShrink: 0 }}>总余额趋势</span>}
-              subTitle={<span style={{ whiteSpace: "normal" }}>上游站点剩余余额合计（按充值汇率折算 ¥，不含我的站点）</span>}
+              style={{ height: "100%" }}
+              // 两行头：副标题换行放标题下方（全站规范 1），范围切换保持在 extra
+              title={<CardTitle title="总余额趋势" sub="上游站点剩余余额合计（按充值汇率折算 ¥，不含我的站点）" />}
+              // 初次加载骨架屏（全站规范 3）；已有数据后切范围不闪骨架
+              loading={!overview && !overviewErr}
               extra={
                 <Segmented
                   size="small"
@@ -548,9 +572,7 @@ export default function OverviewPage() {
                 />
               }
             >
-              {!overview && !overviewErr ? (
-                <ChartEmpty text="加载中…" />
-              ) : overviewErr && !overview ? (
+              {overviewErr && !overview ? (
                 <ChartEmpty text={overviewErr} />
               ) : lineConfig ? (
                 <Line {...(lineConfig as any)} />
@@ -561,8 +583,8 @@ export default function OverviewPage() {
           </Col>
           <Col xs={24} lg={10}>
             <ProCard
-              title={<span style={{ whiteSpace: "nowrap", flexShrink: 0 }}>今日消耗对比</span>}
-              subTitle={<span style={{ whiteSpace: "normal" }}>各站当日 0 点至今实际扣费（¥）</span>}
+              style={{ height: "100%" }}
+              title={<CardTitle title="今日消耗对比" sub="各站当日 0 点至今实际扣费（¥）" />}
             >
               {barConfig ? <Bar {...(barConfig as any)} /> : <ChartEmpty text="今日暂无消耗" />}
             </ProCard>
@@ -573,8 +595,7 @@ export default function OverviewPage() {
       {/* 中转站余额列表（stationRow 全字段） */}
       {stations.length ? (
         <ProCard
-          title={<span style={{ whiteSpace: "nowrap", flexShrink: 0 }}>中转站余额</span>}
-          subTitle={`共 ${stations.length} 个 · 累计已用 ${cny(agg.totalUsedCny)}`}
+          title={<CardTitle title="中转站余额" sub={`共 ${stations.length} 个 · 累计已用 ${cny(agg.totalUsedCny)}`} />}
           style={{ marginTop: 16 }}
         >
           <div>{stations.map(renderStationRow)}</div>

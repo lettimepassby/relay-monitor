@@ -18,14 +18,26 @@ const r2 = (v: number) => Math.round(v * 100) / 100;
 // 跑道分档色（antd 色板）：<3 天红 / <7 天黄 / 其他绿
 const runwayColor = (d: number) => (d < 3 ? "#ff4d4f" : d < 7 ? "#faad14" : "#52c41a");
 
+// 图表统一高度：同排两图高度一致，卡片 height:100% 后同排等高
+const CHART_H = 300;
+
 // 卡片内空态（数据窗口内没有任何消耗快照时）
 function Blank() {
   return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无数据" style={{ padding: "48px 0" }} />;
 }
 
-// 窄视口下卡片标题不被 tooltip/extra 挤成竖排
-function CardTitle({ children }: { children: ReactNode }) {
-  return <span style={{ whiteSpace: "nowrap", flexShrink: 0 }}>{children}</span>;
+// 图表卡统一两行头：标题一行 + 副标题说明换行放下方（允许折行，不与标题同行挤）
+function CardHeader({ title, sub }: { title: ReactNode; sub?: ReactNode }) {
+  return (
+    <div>
+      <div style={{ fontWeight: 600 }}>{title}</div>
+      {sub ? (
+        <Text type="secondary" style={{ fontSize: 12, fontWeight: "normal", whiteSpace: "normal" }}>
+          {sub}
+        </Text>
+      ) : null}
+    </div>
+  );
 }
 
 export default function AnalyticsPage() {
@@ -195,48 +207,79 @@ export default function AnalyticsPage() {
       {/* KPI 行：总成本 / 日均 / 峰值日 / 预计月化 */}
       <Row gutter={[16, 16]}>
         <Col xs={12} md={6}>
-          <ProCard loading={loading && !data}>
+          <ProCard style={{ height: "100%" }} loading={loading && !data}>
             <Statistic title={`${days} 天总成本`} value={derived ? cny(derived.totalCost) : "-"} />
-            {derived && derived.coveredDays < days ? (
-              <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-                余额历史覆盖 {derived.coveredDays} 天，将随运行自动补全
-              </Text>
-            ) : null}
+            {/* 副行统一占位：无内容也保留 minHeight，四卡等高 */}
+            <div style={{ minHeight: 20 }}>
+              {derived && derived.coveredDays < days ? (
+                <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+                  余额历史覆盖 {derived.coveredDays} 天，将随运行自动补全
+                </Text>
+              ) : null}
+            </div>
           </ProCard>
         </Col>
         <Col xs={12} md={6}>
-          <ProCard loading={loading && !data}>
+          <ProCard style={{ height: "100%" }} loading={loading && !data}>
             <Statistic title="日均成本" value={derived ? cny(derived.avgCost) : "-"} />
+            <div style={{ minHeight: 20 }}>{null}</div>
           </ProCard>
         </Col>
         <Col xs={12} md={6}>
-          <ProCard loading={loading && !data}>
+          <ProCard style={{ height: "100%" }} loading={loading && !data}>
             <Statistic title="峰值日" value={derived ? cny(derived.peak?.cost ?? 0) : "-"} />
-            <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>{derived?.peak?.date || ""}</Text>
+            <div style={{ minHeight: 20 }}>
+              <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>{derived?.peak?.date || ""}</Text>
+            </div>
           </ProCard>
         </Col>
         <Col xs={12} md={6}>
-          <ProCard loading={loading && !data}>
+          <ProCard style={{ height: "100%" }} loading={loading && !data}>
             <Statistic title="预计月化成本" value={derived ? cny(derived.monthly) : "-"} />
-            <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>按近 {days} 天日均 × 30</Text>
+            <div style={{ minHeight: 20 }}>
+              <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>按近 {days} 天日均 × 30</Text>
+            </div>
           </ProCard>
         </Col>
       </Row>
 
       {/* 图 1：收支利润趋势（无自有站时退化为成本柱） */}
       <ProCard
-        title={<CardTitle>{derived?.hasIncome ? "收支利润趋势" : "成本趋势"}</CardTitle>}
-        tooltip={derived?.hasIncome ? "日成本 = 上游消耗 × 汇率 + 固定摊销；日收入按下游消费占比分摊；毛利 = 收入 − 成本" : "日成本 = 上游消耗 × 汇率 + 固定摊销"}
+        title={
+          <CardHeader
+            title={derived?.hasIncome ? "收支利润趋势" : "成本趋势"}
+            sub={derived?.hasIncome ? "日成本 = 上游消耗 × 汇率 + 固定摊销；日收入按下游消费占比分摊；毛利 = 收入 − 成本" : "日成本 = 上游消耗 × 汇率 + 固定摊销"}
+          />
+        }
         style={{ marginTop: 16 }}
         loading={loading && !data}
       >
         {derived && derived.hasData ? (
-          <DualAxes
-            height={320}
-            theme={chartTheme}
-            xField="date"
-            legend={{ color: { position: "top" } }}
-            children={[
+          <>
+            {/* G2 内置图例会把三个系列折叠成分页器（成本 ◀1/3▶），此处关闭内置图例，
+                自绘一行 antd 图例，色块与系列 scale.color 保持一致，保证三项永远完整可见 */}
+            <div style={{ display: "flex", justifyContent: "center", gap: 16, flexWrap: "wrap", marginBottom: 8 }}>
+              {[
+                { label: "成本", color: "#1677ff" },
+                ...(derived.hasIncome
+                  ? [
+                      { label: "收入", color: "#52c41a" },
+                      { label: "毛利", color: "#fa8c16" },
+                    ]
+                  : []),
+              ].map((it) => (
+                <span key={it.label} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ width: 10, height: 10, borderRadius: 2, background: it.color, display: "inline-block" }} />
+                  <Text style={{ fontSize: 12 }}>{it.label}</Text>
+                </span>
+              ))}
+            </div>
+            <DualAxes
+              height={CHART_H}
+              theme={chartTheme}
+              xField="date"
+              legend={false}
+              children={[
               {
                 data: derived.cashCols,
                 type: "interval",
@@ -259,8 +302,9 @@ export default function AnalyticsPage() {
                     tooltip: tooltipCny,
                   }]
                 : []),
-            ]}
-          />
+              ]}
+            />
+          </>
         ) : (
           <Blank />
         )}
@@ -269,18 +313,23 @@ export default function AnalyticsPage() {
       <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
         {/* 图 2：时段热力图 */}
         <Col xs={24} lg={14}>
-          <ProCard title={<CardTitle>消耗时段热力图</CardTitle>} tooltip="星期 × 小时的消耗强度（¥），颜色越深消耗越大" loading={loading && !data}>
+          <ProCard
+            title={<CardHeader title="消耗时段热力图" sub="星期 × 小时的消耗强度（¥），颜色越深消耗越大" />}
+            style={{ height: "100%" }}
+            loading={loading && !data}
+          >
             {derived && derived.hasData ? (
               <Heatmap
-                height={300}
+                height={CHART_H}
                 theme={chartTheme}
                 data={derived.heat}
                 xField="hour"
                 yField="weekday"
                 colorField="cny"
                 mark="cell"
-                // 色带交给 G2 主题默认 sequential：浅/暗两种主题下都可读，勿写死浅色端
-                style={{ inset: 0.5 }}
+                // 显式色带：0 值 = 容器底色（浅色白 / 深色深灰），避免 G2 默认桃色系把无消耗格子染成肤色
+                scale={{ color: { range: [token.colorBgContainer, token.colorPrimary] } }}
+                style={{ inset: 0.5, stroke: token.colorBorderSecondary }}
                 axis={{ x: { title: "时" }, y: { title: null } }}
                 legend={{ color: { position: "bottom" } }}
                 tooltip={{ items: [{ channel: "color", valueFormatter: (v: number) => cny(v) }] }}
@@ -292,10 +341,14 @@ export default function AnalyticsPage() {
         </Col>
         {/* 图 3：站点成本占比 */}
         <Col xs={24} lg={10}>
-          <ProCard title={<CardTitle>{`站点成本占比（近 ${days} 天）`}</CardTitle>} tooltip="用量成本 + 固定摊销，¥ 口径" loading={loading && !data}>
+          <ProCard
+            title={<CardHeader title={`站点成本占比（近 ${days} 天）`} sub="用量成本 + 固定摊销，¥ 口径" />}
+            style={{ height: "100%" }}
+            loading={loading && !data}
+          >
             {derived && derived.pie.length ? (
               <Pie
-                height={300}
+                height={CHART_H}
                 theme={chartTheme}
                 data={derived.pie}
                 angleField="cny"
@@ -315,10 +368,14 @@ export default function AnalyticsPage() {
       <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
         {/* 图 4：余额跑道 */}
         <Col xs={24} lg={10}>
-          <ProCard title={<CardTitle>余额跑道（预计可用天数）</CardTitle>} tooltip="按实时消耗速率预测的耗尽天数：红 <3 天、黄 <7 天、绿 ≥7 天" loading={loading && !data}>
+          <ProCard
+            title={<CardHeader title="余额跑道（预计可用天数）" sub="按实时消耗速率预测的耗尽天数：红 <3 天、黄 <7 天、绿 ≥7 天" />}
+            style={{ height: "100%" }}
+            loading={loading && !data}
+          >
             {derived && derived.runway.length ? (
               <Bar
-                height={Math.max(200, derived.runway.length * 44)}
+                height={CHART_H}
                 theme={chartTheme}
                 data={derived.runway}
                 xField="name"
@@ -335,10 +392,14 @@ export default function AnalyticsPage() {
         </Col>
         {/* 图 5：固定成本 vs 用量成本 */}
         <Col xs={24} lg={14}>
-          <ProCard title={<CardTitle>固定成本 vs 用量成本</CardTitle>} tooltip="固定摊销 = 每笔付费按 金额÷天数 摊到生效日" loading={loading && !data}>
+          <ProCard
+            title={<CardHeader title="固定成本 vs 用量成本" sub="固定摊销 = 每笔付费按 金额÷天数 摊到生效日" />}
+            style={{ height: "100%" }}
+            loading={loading && !data}
+          >
             {derived && derived.hasData ? (
               <Column
-                height={300}
+                height={CHART_H}
                 theme={chartTheme}
                 data={derived.stacked}
                 xField="date"
@@ -358,10 +419,14 @@ export default function AnalyticsPage() {
       </Row>
 
       {/* 图 6：累计消耗 */}
-      <ProCard title={<CardTitle>{`累计消耗（近 ${days} 天）`}</CardTitle>} style={{ marginTop: 16 }} loading={loading && !data}>
+      <ProCard
+        title={<CardHeader title={`累计消耗（近 ${days} 天）`} sub={`窗口内日成本逐日累加（用量 + 固定摊销，¥ 口径）`} />}
+        style={{ marginTop: 16 }}
+        loading={loading && !data}
+      >
         {derived && derived.hasData ? (
           <Line
-            height={280}
+            height={CHART_H}
             theme={chartTheme}
             data={derived.cumulative}
             xField="date"

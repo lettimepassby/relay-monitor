@@ -14,7 +14,6 @@ import {
   Result,
   Row,
   Segmented,
-  Spin,
   Statistic,
   Table,
   Tag,
@@ -81,17 +80,30 @@ function SectionHead({ title, sub, extra }: { title: string; sub?: React.ReactNo
   );
 }
 
-// chart 卡片头：ProCard 的 title/subTitle 同行排布，窄视口会把标题压成竖排；
-// 标题固定不换行，副标题可换行（不改任何文案，仅布局）
-function CardTitle({ text }: { text: string }) {
-  return <span style={{ whiteSpace: "nowrap", flexShrink: 0 }}>{text}</span>;
-}
-function CardSub({ text }: { text: React.ReactNode }) {
-  const { token } = theme.useToken();
+// 图表本体统一固定高度，同排两图高度一致（全站规范）
+const CHART_H = 300;
+
+// 图表卡统一两行头（全站规范）：标题一行，副标题换行放标题下方，允许自动换行
+function ChartHead({ title, sub }: { title: string; sub?: React.ReactNode }) {
   return (
-    <span style={{ whiteSpace: "normal", wordBreak: "break-word", fontSize: 12, color: token.colorTextSecondary }}>
-      {text}
-    </span>
+    <div>
+      <div style={{ fontWeight: 600 }}>{title}</div>
+      {sub ? (
+        <Text type="secondary" style={{ fontSize: 12, fontWeight: "normal", whiteSpace: "normal", wordBreak: "break-word" }}>
+          {sub}
+        </Text>
+      ) : null}
+    </div>
+  );
+}
+
+// KPI 统计卡（全站规范 2）：每张卡都渲染副行占位，避免有无副行导致同排高低不齐；卡片撑满列高
+function KpiCard({ sub, children }: { sub?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <ProCard style={{ height: "100%" }}>
+      {children}
+      <div style={{ minHeight: 20 }}>{sub || null}</div>
+    </ProCard>
   );
 }
 
@@ -116,7 +128,7 @@ function ProfitRow({ name, meta, amt, sub }: { name: React.ReactNode; meta?: Rea
 function ChartEmpty({ text }: { text: string }) {
   const { token } = theme.useToken();
   return (
-    <div style={{ height: 180, display: "flex", alignItems: "center", justifyContent: "center", color: token.colorTextTertiary, fontSize: 13 }}>
+    <div style={{ height: CHART_H, display: "flex", alignItems: "center", justifyContent: "center", color: token.colorTextTertiary, fontSize: 13 }}>
       {text}
     </div>
   );
@@ -276,11 +288,22 @@ export default function MyStationPage() {
   if (!data) {
     return (
       <PageContainer title="我的站点" subTitle="自有中转站的下游用量分析与消费预测" extra={headerExtra}>
-        <div style={{ padding: "80px 0", textAlign: "center" }}>
-          <Spin tip="加载中…">
-            <div style={{ height: 40 }} />
-          </Spin>
-        </div>
+        {/* 初次加载统一 ProCard 骨架屏（全站规范 3），形状对齐真实布局：4 KPI + 两图 */}
+        <Row gutter={[12, 12]}>
+          {[0, 1, 2, 3].map((i) => (
+            <Col key={i} xs={12} md={6}>
+              <ProCard loading style={{ height: "100%" }} />
+            </Col>
+          ))}
+        </Row>
+        <Row gutter={[12, 12]} style={{ marginTop: 12 }}>
+          <Col xs={24} lg={14}>
+            <ProCard loading style={{ height: "100%", minHeight: CHART_H }} />
+          </Col>
+          <Col xs={24} lg={10}>
+            <ProCard loading style={{ height: "100%", minHeight: CHART_H }} />
+          </Col>
+        </Row>
       </PageContainer>
     );
   }
@@ -364,18 +387,18 @@ export default function MyStationPage() {
       {/* KPI：期内消费 / Tokens / 请求数 / 活跃用户 */}
       <Row gutter={[12, 12]}>
         <Col xs={12} md={6}>
-          <ProCard><Statistic title="期内消费" value={cny4(totCost)} /></ProCard>
+          <KpiCard><Statistic title="期内消费" value={cny4(totCost)} /></KpiCard>
         </Col>
         <Col xs={12} md={6}>
-          <ProCard>
+          <KpiCard>
             <Statistic title="Tokens" value={fmtTokens(totTokens)} valueRender={(node) => <span title={num(totTokens)}>{node}</span>} />
-          </ProCard>
+          </KpiCard>
         </Col>
         <Col xs={12} md={6}>
-          <ProCard><Statistic title="请求数" value={num(totReqs)} /></ProCard>
+          <KpiCard><Statistic title="请求数" value={num(totReqs)} /></KpiCard>
         </Col>
         <Col xs={12} md={6}>
-          <ProCard><Statistic title="活跃用户" value={users.length} suffix="个" /></ProCard>
+          <KpiCard><Statistic title="活跃用户" value={users.length} suffix="个" /></KpiCard>
         </Col>
       </Row>
 
@@ -391,21 +414,20 @@ export default function MyStationPage() {
           />
           <Row gutter={[12, 12]}>
             <Col xs={12} md={6}>
-              <ProCard>
+              <KpiCard sub={incomeSub ? <Text type="secondary" style={{ fontSize: 12 }}>{incomeSub}</Text> : null}>
                 <Statistic title="期内收入" value={cny(p.incomeCny)} />
-                {incomeSub ? <Text type="secondary" style={{ fontSize: 12 }}>{incomeSub}</Text> : null}
-              </ProCard>
+              </KpiCard>
             </Col>
             <Col xs={12} md={6}>
-              <ProCard><Statistic title="期内成本" value={cny(p.totalCostCny)} /></ProCard>
+              <KpiCard><Statistic title="期内成本" value={cny(p.totalCostCny)} /></KpiCard>
             </Col>
             <Col xs={12} md={6}>
-              <ProCard><Statistic title="利润" value={cny(p.profitCny)} valueStyle={{ color: profitColor }} /></ProCard>
+              <KpiCard><Statistic title="利润" value={cny(p.profitCny)} valueStyle={{ color: profitColor }} /></KpiCard>
             </Col>
             <Col xs={12} md={6}>
-              <ProCard>
+              <KpiCard>
                 <Statistic title="利润率" value={p.marginPct != null ? p.marginPct + "%" : "—"} valueStyle={{ color: profitColor }} />
-              </ProCard>
+              </KpiCard>
             </Col>
           </Row>
 
@@ -518,24 +540,27 @@ export default function MyStationPage() {
             </ProCard>
           ) : null}
 
-          {/* 成本明细（按上游口径） */}
+          {/* 成本明细（按上游口径），区块标题与「未纳入成本的渠道」等保持一致 */}
           {p.costs.length ? (
-            <ProCard style={{ marginTop: 14 }}>
-              {p.costs.map((c: any) => (
-                <ProfitRow
-                  key={c.name}
-                  name={
-                    <>
-                      {c.name} <Tag>{MODE_LABEL[c.mode] || c.mode}</Tag>
-                      {c.note ? <Tag color={c.note === "已到期" ? "warning" : undefined}>{c.note}</Tag> : null}
-                    </>
-                  }
-                  meta={`渠道：${c.channels.join("、")}`}
-                  amt={cny(c.cny)}
-                  sub="期内成本"
-                />
-              ))}
-            </ProCard>
+            <>
+              <SectionHead title="成本明细" sub={`共 ${p.costs.length} 个纳入成本的上游 · 按各上游口径计入期内成本`} />
+              <ProCard>
+                {p.costs.map((c: any) => (
+                  <ProfitRow
+                    key={c.name}
+                    name={
+                      <>
+                        {c.name} <Tag>{MODE_LABEL[c.mode] || c.mode}</Tag>
+                        {c.note ? <Tag color={c.note === "已到期" ? "warning" : undefined}>{c.note}</Tag> : null}
+                      </>
+                    }
+                    meta={`渠道：${c.channels.join("、")}`}
+                    amt={cny(c.cny)}
+                    sub="期内成本"
+                  />
+                ))}
+              </ProCard>
+            </>
           ) : (
             <Alert
               style={{ marginTop: 14 }}
@@ -566,13 +591,13 @@ export default function MyStationPage() {
       {/* ---- 用量趋势 + 分模型 Token ---- */}
       <Row gutter={[12, 12]} style={{ marginTop: p && !p.error ? 0 : 14 }}>
         <Col xs={24} lg={14}>
-          <ProCard title={<CardTitle text="用量趋势" />} subTitle={<CardSub text={`${hourly ? "按小时" : "按天"}汇总（tokens）`} />}>
+          <ProCard style={{ height: "100%" }} title={<ChartHead title="用量趋势" sub={`${hourly ? "按小时" : "按天"}汇总（tokens）`} />}>
             {!buckets.length || buckets.every((b: any) => !b.tokens) ? (
               <ChartEmpty text="该范围内暂无用量数据" />
             ) : (
               <Column
                 theme={plotTheme}
-                height={240}
+                height={CHART_H}
                 data={buckets}
                 xField="label"
                 yField="tokens"
@@ -590,13 +615,13 @@ export default function MyStationPage() {
           </ProCard>
         </Col>
         <Col xs={24} lg={10}>
-          <ProCard title={<CardTitle text="分模型 Token" />} subTitle={<CardSub text="按用量降序，最多 10 项" />}>
+          <ProCard style={{ height: "100%" }} title={<ChartHead title="分模型 Token" sub="按用量降序，最多 10 项" />}>
             {!modelItems.length ? (
               <ChartEmpty text="该范围内暂无用量数据" />
             ) : (
               <Bar
                 theme={plotTheme}
-                height={Math.max(200, modelItems.length * 32 + 40)}
+                height={CHART_H}
                 data={modelItems}
                 xField="model"
                 yField="tokens"
@@ -620,10 +645,10 @@ export default function MyStationPage() {
       {d.hourly ? (
         <ProCard
           style={{ marginTop: 12 }}
-          title={<CardTitle text="未来 24 小时预测" />}
-          subTitle={
-            <CardSub
-              text={`今天已消费 ${cny(d.hourly.todaySoFar * rate)} · 全天预计 ≈${cny(d.hourly.todayEst * rate)} · 未来 24h 合计 ≈${cny(
+          title={
+            <ChartHead
+              title="未来 24 小时预测"
+              sub={`今天已消费 ${cny(d.hourly.todaySoFar * rate)} · 全天预计 ≈${cny(d.hourly.todayEst * rate)} · 未来 24h 合计 ≈${cny(
                 d.hourly.next24Total * rate
               )}${d.hourly.backtestWapePct != null ? ` · 24h 总量回测偏差 ±${d.hourly.backtestWapePct}%` : ""}`}
             />
@@ -634,7 +659,7 @@ export default function MyStationPage() {
           ) : (
             <Column
               theme={plotTheme}
-              height={220}
+              height={CHART_H}
               data={hourlyAll}
               xField="t"
               yField="cost"
@@ -661,14 +686,14 @@ export default function MyStationPage() {
       {/* ---- 消费预测 + 分用户消费 ---- */}
       <Row gutter={[12, 12]} style={{ marginTop: 12 }}>
         <Col xs={24} lg={14}>
-          <ProCard title={<CardTitle text="消费预测" />} subTitle={<CardSub text={fcSub} />}>
+          <ProCard style={{ height: "100%" }} title={<ChartHead title="消费预测" sub={fcSub} />}>
             {!dailyHist.length && !fcPts.length ? (
               <ChartEmpty text="历史数据不足，暂无法预测" />
             ) : (
               <>
                 <Line
                   theme={plotTheme}
-                  height={240}
+                  height={CHART_H}
                   data={forecastLineData}
                   xField="date"
                   yField="cost"
@@ -715,13 +740,13 @@ export default function MyStationPage() {
           </ProCard>
         </Col>
         <Col xs={24} lg={10}>
-          <ProCard title={<CardTitle text="分用户消费" />} subTitle={<CardSub text="期内消费降序，最多 10 项（¥）" />}>
+          <ProCard style={{ height: "100%" }} title={<ChartHead title="分用户消费" sub="期内消费降序，最多 10 项（¥）" />}>
             {!userItems.length ? (
               <ChartEmpty text="该范围内暂无数据" />
             ) : (
               <Bar
                 theme={plotTheme}
-                height={Math.max(200, userItems.length * 32 + 40)}
+                height={CHART_H}
                 data={userItems}
                 xField="user"
                 yField="cost"

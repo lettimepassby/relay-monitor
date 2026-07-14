@@ -4,7 +4,7 @@
 // 时间档位、站点筛选、四张合计卡、错误站点提示、趋势/分模型图、模型明细表，口径与文案一致
 import { useEffect, useMemo, useRef, useState } from "react";
 import { PageContainer, ProCard, ProTable } from "@ant-design/pro-components";
-import { Alert, Button, Segmented, Select, Space, Statistic, theme } from "antd";
+import { Alert, Button, Segmented, Select, Space, Statistic, Typography, theme } from "antd";
 import { ReloadOutlined } from "@ant-design/icons";
 import { Bar, Column } from "@ant-design/plots";
 import { api, cny4, fmtTokens, rateOf } from "../../../lib/client";
@@ -32,19 +32,31 @@ function truncateLabel(s: any, units = 14): string {
 
 const num = (n: any) => Number(n ?? 0).toLocaleString("en-US");
 
+// 全站统一：图表本体固定高度，保证同排两图等高
+const CHART_H = 300;
+
+const { Text } = Typography;
+
 // 图表空态 / 正文加载与错误态（文案照抄 v1 chart-empty）
 function ChartEmpty({ text }: { text: string }) {
   const { token } = theme.useToken();
   return (
-    <div style={{ height: 220, display: "flex", alignItems: "center", justifyContent: "center", color: token.colorTextTertiary, fontSize: 13 }}>
+    <div style={{ height: CHART_H, display: "flex", alignItems: "center", justifyContent: "center", color: token.colorTextTertiary, fontSize: 13 }}>
       {text}
     </div>
   );
 }
 
-// 图表卡片标题：窄视口下标题不换行不收缩，副标题可省略（防止 ~800px 时被挤成竖排）
-function CardTitle({ text }: { text: string }) {
-  return <span style={{ whiteSpace: "nowrap", flexShrink: 0 }}>{text}</span>;
+// 全站统一两行卡头：标题在上、副标题换行放下方（允许换行，不再与标题同行挤）
+function CardTitle({ text, sub }: { text: string; sub: string }) {
+  return (
+    <div>
+      <div style={{ fontWeight: 600 }}>{text}</div>
+      <Text type="secondary" style={{ fontSize: 12, fontWeight: "normal", whiteSpace: "normal" }}>
+        {sub}
+      </Text>
+    </div>
+  );
 }
 
 export default function UsagePage() {
@@ -268,27 +280,39 @@ export default function UsagePage() {
           <ChartEmpty text={err} />
         </ProCard>
       ) : !agg ? (
-        <ProCard>
-          <ChartEmpty text="加载中…" />
-        </ProCard>
+        // 初次加载：与其它页面统一的 ProCard 骨架屏（合计卡一排 + 两张图占位）
+        <>
+          <ProCard gutter={16} wrap style={{ marginBottom: 16 }} ghost>
+            {[0, 1, 2, 3].map((i) => (
+              <ProCard key={i} colSpan={{ xs: 12, md: 6 }} variant="outlined" loading style={{ height: "100%" }} />
+            ))}
+          </ProCard>
+          <ProCard gutter={16} wrap style={{ marginBottom: 16 }} ghost>
+            <ProCard colSpan={{ xs: 24, lg: 14 }} variant="outlined" loading style={{ height: "100%", minHeight: CHART_H }} />
+            <ProCard colSpan={{ xs: 24, lg: 10 }} variant="outlined" loading style={{ height: "100%", minHeight: CHART_H }} />
+          </ProCard>
+        </>
       ) : (
         <>
           {/* 合计卡：总 Tokens / 实际消耗 / 请求数 / 数据来源 */}
           <ProCard gutter={16} wrap style={{ marginBottom: 16 }}>
-            <ProCard colSpan={{ xs: 12, md: 6 }} variant="outlined">
+            <ProCard colSpan={{ xs: 12, md: 6 }} variant="outlined" style={{ height: "100%" }}>
               <Statistic
                 title="总 Tokens"
                 valueRender={() => <span title={num(agg.totTokens)}>{fmtTokens(agg.totTokens)}</span>}
                 value={agg.totTokens}
               />
+              <div style={{ minHeight: 20 }}>{null}</div>
             </ProCard>
-            <ProCard colSpan={{ xs: 12, md: 6 }} variant="outlined">
+            <ProCard colSpan={{ xs: 12, md: 6 }} variant="outlined" style={{ height: "100%" }}>
               <Statistic title="实际消耗" value={cny4(agg.totCost)} />
+              <div style={{ minHeight: 20 }}>{null}</div>
             </ProCard>
-            <ProCard colSpan={{ xs: 12, md: 6 }} variant="outlined">
+            <ProCard colSpan={{ xs: 12, md: 6 }} variant="outlined" style={{ height: "100%" }}>
               <Statistic title="请求数" value={num(agg.totReqs)} />
+              <div style={{ minHeight: 20 }}>{null}</div>
             </ProCard>
-            <ProCard colSpan={{ xs: 12, md: 6 }} variant="outlined">
+            <ProCard colSpan={{ xs: 12, md: 6 }} variant="outlined" style={{ height: "100%" }}>
               <Statistic
                 title="数据来源"
                 valueRender={() => (
@@ -299,6 +323,7 @@ export default function UsagePage() {
                 )}
                 value={agg.okSts.length}
               />
+              <div style={{ minHeight: 20 }}>{null}</div>
             </ProCard>
           </ProCard>
 
@@ -325,8 +350,8 @@ export default function UsagePage() {
             <ProCard
               colSpan={{ xs: 24, lg: 14 }}
               variant="outlined"
-              title={<CardTitle text="Token 消耗趋势" />}
-              subTitle={<span style={{ whiteSpace: "normal" }}>{`${data.granularity === "hour" ? "按小时" : "按天"}汇总`}</span>}
+              style={{ height: "100%" }}
+              title={<CardTitle text="Token 消耗趋势" sub={`${data.granularity === "hour" ? "按小时" : "按天"}汇总`} />}
             >
               {trendEmpty ? (
                 <ChartEmpty text="该范围内暂无用量数据" />
@@ -335,7 +360,7 @@ export default function UsagePage() {
                   data={agg.buckets}
                   xField="label"
                   yField="tokens"
-                  height={240}
+                  height={CHART_H}
                   theme={dark ? "classicDark" : "classic"}
                   style={{ radiusTopLeft: 4, radiusTopRight: 4, maxWidth: 24 }}
                   axis={{
@@ -349,11 +374,12 @@ export default function UsagePage() {
             <ProCard
               colSpan={{ xs: 24, lg: 10 }}
               variant="outlined"
-              title={<CardTitle text="分模型 Token" />}
-              subTitle={
-                <span style={{ whiteSpace: "normal" }}>
-                  {agg.modelsByDate ? "Sub2API 模型明细按自然日（昨日+今日）统计" : "按用量降序，最多显示 10 项"}
-                </span>
+              style={{ height: "100%" }}
+              title={
+                <CardTitle
+                  text="分模型 Token"
+                  sub={agg.modelsByDate ? "Sub2API 模型明细按自然日（昨日+今日）统计" : "按用量降序，最多显示 10 项"}
+                />
               }
             >
               {!modelChartItems.length ? (
@@ -363,7 +389,7 @@ export default function UsagePage() {
                   data={modelChartItems}
                   xField="model"
                   yField="tokens"
-                  height={Math.max(160, modelChartItems.length * 30 + 40)}
+                  height={CHART_H}
                   theme={dark ? "classicDark" : "classic"}
                   style={{ maxWidth: 16, radiusTopRight: 4, radiusBottomRight: 4 }}
                   axis={{
