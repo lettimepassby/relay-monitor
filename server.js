@@ -582,7 +582,8 @@ app.get("/api/own/analytics", async (req, res) => {
     } catch { /* 拿不到就退化为不区分管理员 */ }
     const adminSet = new Set((ownUsers || []).filter((u) => u.role >= 10).map((u) => u.username));
 
-    // 小时级序列（近 14 天，缺时补 0，不含当前未完小时）→ 未来 24 小时预测
+    // 小时级序列（近 28 天，缺时补 0，不含当前未完小时）→ 未来 24 小时预测
+    // modelRows 本就拉了 35 天：更长的序列让画像与 conformal 校准都有足够原点
     const hourFmt = new Intl.DateTimeFormat("en-US", { timeZone: tz, hour12: false, hour: "2-digit" });
     const hodOf = (ms) => Number(hourFmt.format(new Date(ms))) % 24;
     const hmap = new Map();
@@ -591,7 +592,7 @@ app.get("/api/own/analytics", async (req, res) => {
       hmap.set(hk, (hmap.get(hk) || 0) + r.cost);
     }
     const lastFullHour = Math.floor(now / 3600000) * 3600000 - 3600000;
-    const hourlyStart = Math.max(lastFullHour - 14 * 86400000, hmap.size ? Math.min(...hmap.keys()) : lastFullHour);
+    const hourlyStart = Math.max(lastFullHour - 28 * 86400000, hmap.size ? Math.min(...hmap.keys()) : lastFullHour);
     const hourlySeries = [];
     for (let t = hourlyStart; t <= lastFullHour; t += 3600000) {
       hourlySeries.push({ t, cost: Math.round((hmap.get(t) || 0) * 10000) / 10000 });
