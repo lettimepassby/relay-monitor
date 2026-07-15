@@ -7,7 +7,7 @@ import { DEFAULT_RULES } from "../lib/alerts.js";
 const DEFAULT_SETTINGS = {
   refreshIntervalSec: 60, // 后台自动刷新间隔
   lowBalanceUsd: 5, // 全局低余额告警阈值（美元）
-  // 每日日报：按服务器时区定时汇总昨日「我的站点」经营情况并推送
+  // 每日日报：默认按北京时间定时汇总昨日「我的站点」经营情况并推送
   dailyReport: { enabled: false, time: "09:00", channelIds: [], lastSent: null },
 };
 

@@ -7,6 +7,42 @@ import { broadcast } from "../lib/notify.js";
 import { fmtEta } from "../lib/alerts.js";
 import { getOwnUsers, computeResold, computeProfit } from "./own-helpers.js";
 
+const DEFAULT_REPORT_TIME_ZONE = "Asia/Shanghai";
+const configuredReportTimeZone = process.env.REPORT_TIME_ZONE || DEFAULT_REPORT_TIME_ZONE;
+export const REPORT_TIME_ZONE = (() => {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: configuredReportTimeZone });
+    return configuredReportTimeZone;
+  } catch {
+    return DEFAULT_REPORT_TIME_ZONE;
+  }
+})();
+
+function shiftDateLabel(label, days) {
+  const [year, month, day] = label.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
+}
+
+// 日报日界线必须与进程/容器时区无关，否则 UTC 部署会在北京时间 08:00 才切换“昨天”。
+export function reportDayWindow(nowMs = Date.now(), tz = REPORT_TIME_ZONE) {
+  const todayLabel = dateStrInTz(nowMs, tz);
+  const dayEnd = parseDateLabel(todayLabel, tz);
+  const dayStart = parseDateLabel(shiftDateLabel(todayLabel, -1), tz);
+  const wideStart = parseDateLabel(shiftDateLabel(todayLabel, -34), tz);
+  return { tz, todayLabel, dayStart, dayEnd, wideStart };
+}
+
+export function reportClock(nowMs = Date.now(), tz = REPORT_TIME_ZONE) {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: tz,
+    hourCycle: "h23",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).formatToParts(new Date(nowMs));
+  const value = (type) => parts.find((p) => p.type === type)?.value || "00";
+  return { today: dateStrInTz(nowMs, tz), hhmm: `${value("hour")}:${value("minute")}` };
+}
+
 const rptCny = (v) => "¥" + Number(v ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const rptTok = (n) => {
   n = Number(n) || 0;
@@ -21,21 +57,16 @@ const pctDelta = (cur, base) => {
   return `${d >= 0 ? "+" : ""}${d.toFixed(1)}%`;
 };
 
-// 汇总昨日（服务器时区自然日）经营情况，返回 {title, text, html}
+// 汇总昨日（日报时区自然日）经营情况，返回 {title, text, html}
 export async function buildReport(rt) {
   const { store, history } = rt;
   const own = store.list().find((s) => s.isOwn && s.type === "newapi");
   if (!own) throw new Error("还没有标记「我的中转站」，无法生成日报");
-  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const midnight = new Date();
-  midnight.setHours(0, 0, 0, 0);
-  const dayEnd = midnight.getTime();
-  const dayStart = dayEnd - 86400000;
-  const wideStart = dayEnd - 34 * 86400000;
+  const { tz, dayStart, dayEnd, wideStart } = reportDayWindow();
   const ownRate = own.cnyPerUsd != null && own.cnyPerUsd > 0 ? own.cnyPerUsd : 1;
 
   const [modelRows, userRows] = await Promise.all([
-    queryOwnData(own, wideStart, Date.now(), "model"),
+    queryOwnData(own, wideStart, dayEnd, "model"),
     queryOwnData(own, dayStart, dayEnd, "user"),
   ]);
   let ownUsers = null;
@@ -53,8 +84,9 @@ export async function buildReport(rt) {
     return [...m.values()].sort((a, b) => b.cost - a.cost);
   };
   const yRows = modelRows.filter((r) => r.t >= dayStart && r.t < dayEnd);
+  const yUserRows = userRows.filter((r) => r.t >= dayStart && r.t < dayEnd);
   const byModel = agg(yRows);
-  const byUser = agg(userRows).map((u) => ({ ...u, isAdmin: adminSet.has(u.key) }));
+  const byUser = agg(yUserRows).map((u) => ({ ...u, isAdmin: adminSet.has(u.key) }));
   const totalCost = byModel.reduce((a, m) => a + m.cost, 0);
   const totalTokens = byModel.reduce((a, m) => a + m.tokens, 0);
   const totalReqs = byModel.reduce((a, m) => a + m.requests, 0);
@@ -102,7 +134,7 @@ export async function buildReport(rt) {
     .reduce((a, u) => a + u.quotaUsd, 0) * ownRate;
 
   const dateLabel = dateStrInTz(dayStart, tz);
-  const dow = "日一二三四五六"[new Date(dayStart).getDay()];
+  const dow = "日一二三四五六"[new Date(`${dateLabel}T00:00:00Z`).getUTCDay()];
   const L = [];
   L.push(`【${own.name} 日报】${dateLabel}（周${dow}）`);
   L.push("");
@@ -272,7 +304,7 @@ function buildReportHtml(rt, d) {
     ${section("上游余额", upRows)}
     ${d.hasUsers ? section(`用户余额合计：${money(d.balanceTotal)}（预收 · ${d.userCount} 个用户）`, "") : ""}
     ${outlook ? section("展望", outlook) : ""}
-    <tr><td style="padding:16px 12px;${font}font-size:11px;color:${C.sub}">relay-monitor 每日日报 · 数据截至发送时刻</td></tr>
+    <tr><td style="padding:16px 12px;${font}font-size:11px;color:${C.sub}">relay-monitor 每日日报 · 统计区间为 ${esc(d.dateLabel)} 00:00–24:00</td></tr>
   </table></td></tr></table></body></html>`;
 }
 
@@ -292,15 +324,13 @@ export async function sendReport(rt, channelIds) {
   return { ok: true, results };
 }
 
-// 调度：每 30 秒检查（HH:MM 命中且当天未发送）
+// 调度：每 30 秒按日报时区检查（HH:MM 命中且当天未发送）
 export function startReportScheduler(rt) {
   if (rt._reportTimer) clearInterval(rt._reportTimer); // HMR/重复初始化时防止双定时器
   rt._reportTimer = setInterval(async () => {
     const cfg = rt.store.settings.dailyReport;
     if (!cfg?.enabled || !cfg.time) return;
-    const now = new Date();
-    const hhmm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
-    const today = new Intl.DateTimeFormat("en-CA").format(now);
+    const { hhmm, today } = reportClock();
     if (hhmm !== cfg.time || cfg.lastSent === today) return;
     cfg.lastSent = today; // 先占位，避免同一分钟重复发送
     await rt.store.save();

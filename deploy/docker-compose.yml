@@ -12,6 +12,8 @@ services:
     environment:
       # 「今日消耗 / 用量统计」的日期边界按此时区计算
       - TZ=Asia/Shanghai
+      # 日报的统计日界线与定时发送时区（未设置时也默认 Asia/Shanghai）
+      - REPORT_TIME_ZONE=Asia/Shanghai
       # ---- MySQL（外部实例，必填）----
       - DB_HOST=change-me
       - DB_PORT=3306
