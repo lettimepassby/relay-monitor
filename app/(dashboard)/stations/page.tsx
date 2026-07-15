@@ -2,7 +2,7 @@
 // 中转站管理页：站点列表 + 添加/编辑弹窗 + 单站刷新/删除 + 余额趋势详情弹窗
 // 功能对照 v1 app.js：renderStations/stationRow（553-586、193-288）、站点表单弹窗（1487-1614）、
 // 趋势弹窗 openTrend/drawChart（1675-1822）——文案与数字口径逐条对齐，布局用 Pro 风格重排
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { PageContainer, ProCard } from "@ant-design/pro-components";
 import {
   App,
@@ -25,12 +25,10 @@ import {
   DeleteOutlined,
   CloseOutlined,
 } from "@ant-design/icons";
-import { Line } from "@ant-design/plots";
 import TrendModal from "../trend-modal";
 import LastRefreshed from "../last-refreshed";
 import dayjs from "dayjs";
 import { api, cny, usd, rateOf, fmtTokens, fmtEta, statusOf } from "../../../lib/client";
-import { useThemeMode } from "../../providers";
 
 // ---- 展示工具（v1 app.js 同名函数平移）--------------------------------------
 const PLATE: Record<string, string> = { newapi: "NA", "newapi-key": "KEY", sub2api: "S2", "sub2api-password": "S2" };
@@ -86,28 +84,31 @@ const hintStyle = (token: ReturnType<typeof theme.useToken>["token"]): React.CSS
   lineHeight: 1.6,
 });
 
-// ---- 迷你余额走势（近 48 小时，v1 sparkSvg 的 plots 版）-----------------------
-function Spark({ pts }: { pts: any[] }) {
-  const { dark } = useThemeMode();
-  const data = useMemo(() => (pts || []).map((p: any) => ({ date: new Date(p[0]), v: p[1] })), [pts]);
+// ---- 迷你余额走势（近 48 小时，与总览卡片使用相同坐标口径）--------------------
+function Spark({ pts }: { pts: [number, number][] }) {
+  const { token } = theme.useToken();
   if (!pts || pts.length < 2) return null;
+
+  const W = 170, H = 30, P = 3;
+  const t0 = pts[0][0], t1 = pts[pts.length - 1][0];
+  let min = Infinity, max = -Infinity;
+  for (const [, v] of pts) {
+    if (v < min) min = v;
+    if (v > max) max = v;
+  }
+  if (max - min < 1e-9) { min -= 1; max += 1; }
+  const x = (t: number) => P + ((t - t0) / (t1 - t0 || 1)) * (W - 2 * P);
+  const y = (v: number) => P + (1 - (v - min) / (max - min)) * (H - 2 * P);
+  const line = pts.map((p, i) => `${i ? "L" : "M"}${x(p[0]).toFixed(1)},${y(p[1]).toFixed(1)}`).join("");
+  const area = `${line}L${x(t1).toFixed(1)},${H - P}L${x(t0).toFixed(1)},${H - P}Z`;
+  const last = pts[pts.length - 1];
+
   return (
-    <div style={{ width: 170, maxWidth: "100%", height: 30, overflow: "hidden" }}>
-      <Line
-        data={data}
-        xField="date"
-        yField="v"
-        width={170}
-        height={30}
-        axis={false}
-        legend={false}
-        tooltip={false}
-        animate={false}
-        padding={3}
-        theme={dark ? "classicDark" : "classic"}
-        style={{ lineWidth: 1.5 }}
-      />
-    </div>
+    <svg viewBox={`0 0 ${W} ${H}`} width={170} height={30} aria-hidden="true" style={{ display: "block", maxWidth: "100%" }}>
+      <path d={area} fill={token.colorPrimaryBg} />
+      <path d={line} fill="none" stroke={token.colorPrimary} strokeWidth={1.5} />
+      <circle cx={x(last[0]).toFixed(1)} cy={y(last[1]).toFixed(1)} r={2.5} fill={token.colorPrimary} />
+    </svg>
   );
 }
 
