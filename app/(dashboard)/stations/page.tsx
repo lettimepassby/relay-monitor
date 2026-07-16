@@ -252,6 +252,7 @@ function StationRow(props: {
         <div style={{ fontWeight: 600 }}>
           {s.name}
           {s.isOwn ? <Tag color="blue" style={{ marginInlineStart: 6 }}>我的站</Tag> : null}
+          {s.noRenewal ? <Tag color="orange" style={{ marginInlineStart: 6 }}>不再续费</Tag> : null}
           {s.demo ? <Tag style={{ marginInlineStart: 6 }}>演示</Tag> : null}
           {statusPill(st)}
         </div>
@@ -394,6 +395,7 @@ export default function StationsPage() {
       lowBalanceUsd: station?.lowBalanceUsd ?? "",
       cnyPerUsd: station?.cnyPerUsd ?? "",
       isOwn: !!station?.isOwn,
+      noRenewal: !!station?.noRenewal,
     });
     // 付费记录：无记录时默认给一行、起始日期今天（同 v1 seedPurchaseRows）
     const list = station?.fixedPurchases;
@@ -424,6 +426,7 @@ export default function StationsPage() {
         }))
         .filter((p) => p.amount !== "" || p.days !== ""),
       isOwn: v.type === "newapi" && !!v.isOwn,
+      noRenewal: v.type !== "fixed" && !!v.noRenewal,
     };
     const at = String(v.accessToken || "").trim();
     const ak = String(v.apiKey || "").trim();
@@ -574,6 +577,16 @@ export default function StationsPage() {
               extra="面板金额将按此汇率折算成人民币展示；余额告警仍按站点余额判断。"
             >
               <Input placeholder="如 2 表示 $1 = ¥2，留空按 1:1" />
+            </Form.Item>
+          )}
+          {!isFixed && (
+            <Form.Item
+              name="noRenewal"
+              valuePropName="checked"
+              style={{ marginBottom: formType === "newapi" ? 12 : 0 }}
+              extra="余额首次低于阈值时提醒一次；之后不再发送持续低余额、余额耗尽或预计耗尽提醒。查询失败告警不受影响。"
+            >
+              <Checkbox>不再续费此中转站</Checkbox>
             </Form.Item>
           )}
           {isFixed && (

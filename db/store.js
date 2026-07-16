@@ -90,6 +90,8 @@ export class Store {
     // 迁移：历代固定成本字段（fixedMonthlyCny / fixedCostCny+fixedDays+fixedStartDate）
     // 统一为付费记录数组 fixedPurchases（v1 老数据经 db/migrate.js 导入时同样适用）
     for (const s of this.data.stations) {
+      // v2.1：旧站点没有续费计划字段，默认保持原有的正常重复提醒策略。
+      s.noRenewal = !!s.noRenewal;
       if (!Array.isArray(s.fixedPurchases)) {
         s.fixedPurchases = [];
         const amount = s.fixedCostCny ?? s.fixedMonthlyCny;
@@ -280,6 +282,8 @@ export class Store {
       cnyPerUsd: numOrNull(input.cnyPerUsd),
       // 我自己的中转站：启用「我的站点」下游用量分析（需管理员令牌）
       isOwn: !!input.isOwn,
+      // 不再续费：余额低于阈值时仅提醒一次，不再发送耗尽/ETA/持续余额提醒
+      noRenewal: input.type !== "fixed" && !!input.noRenewal,
       // 固定成本付费记录（可多笔叠加）：每笔按 金额÷天数 在生效区间内摊销
       fixedPurchases: sanitizePurchases(input.fixedPurchases) || [],
       // 转售给下游的管理员/root API Key（其消费计入收入而非成本）
@@ -287,7 +291,7 @@ export class Store {
       demo: !!input.demo,
       createdAt: new Date().toISOString(),
       s2Tokens: null, // Sub2API 密码模式的令牌缓存 {accessToken, refreshToken, expiresAt}
-      alertState: null, // 告警去重状态 {state, notifiedAt, etaNotifiedAt}
+      alertState: null, // 告警去重状态（含不再续费站点的一次性低余额提醒时间）
       balance: null, // 最近一次查询结果
     };
     this.data.stations.push(station);
@@ -308,6 +312,15 @@ export class Store {
     if ("lowBalanceUsd" in patch) s.lowBalanceUsd = numOrNull(patch.lowBalanceUsd);
     if ("cnyPerUsd" in patch) s.cnyPerUsd = numOrNull(patch.cnyPerUsd);
     if ("isOwn" in patch) s.isOwn = !!patch.isOwn;
+    if ("noRenewal" in patch || s.type === "fixed") {
+      const noRenewal = s.type !== "fixed" && !!patch.noRenewal;
+      if (noRenewal !== !!s.noRenewal && s.alertState) {
+        // 每次重新标记都开启一轮新的单次提醒；其他告警去重状态保持不变。
+        const { noRenewalLowNotifiedAt, ...alertState } = s.alertState;
+        s.alertState = alertState;
+      }
+      s.noRenewal = noRenewal;
+    }
     if ("fixedPurchases" in patch) s.fixedPurchases = sanitizePurchases(patch.fixedPurchases) || [];
     if ("resoldAdminKeys" in patch) s.resoldAdminKeys = sanitizeResoldKeys(patch.resoldAdminKeys) || [];
     // 凭证或站点实际变化才作废令牌缓存（前端编辑总会带上 type/email 原值，
