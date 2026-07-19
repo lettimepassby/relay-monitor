@@ -76,7 +76,7 @@ export const GET = withAuth(async (request, rt) => {
   const heatMap = new Map(); // "weekday|hour" -> cny
   for (const r of heatRows) {
     const s = byId.get(r.stationId);
-    if (!s) continue;
+    if (!s || s.isOwn || s.includeInProfit === false) continue;
     const k = `${r.weekday}|${r.hour}`;
     heatMap.set(k, (heatMap.get(k) || 0) + Number(r.usd) * rateOf(s));
   }
@@ -123,6 +123,7 @@ export const GET = withAuth(async (request, rt) => {
       id: s.id,
       name: s.name,
       isOwn: !!s.isOwn,
+      includeInProfit: s.includeInProfit !== false,
       cnyPerUsd: s.cnyPerUsd ?? null,
       totalUsd: r4(usd),
       totalCny: r2(usd * rateOf(s)),

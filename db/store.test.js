@@ -64,14 +64,15 @@ test("成本渠道匹配别名会清理空值并去重", async () => {
   assert.deepEqual(store.get(added.id).costAliases, ["alias-a", "alias-b"]);
 });
 
-test("全局只保留一个 Sub2API 成本汇总站", async () => {
+test("监控上游默认计入利润成本并可显式排除", async () => {
   const store = new Store(fakePool());
-  const first = await store.add({ name: "网关 A", type: "sub2api", baseUrl: "https://a.example.com", costGateway: true });
-  const second = await store.add({ name: "网关 B", type: "sub2api-password", baseUrl: "https://b.example.com", costGateway: true });
-  assert.equal(store.get(first.id).costGateway, false);
-  assert.equal(store.get(second.id).costGateway, true);
+  const included = await store.add({ name: "负载均衡后的上游", type: "newapi", baseUrl: "https://a.example.com" });
+  const excluded = await store.add({
+    name: "重复汇总节点", type: "sub2api-password", baseUrl: "https://b.example.com", includeInProfit: false,
+  });
+  assert.equal(store.get(included.id).includeInProfit, true);
+  assert.equal(store.get(excluded.id).includeInProfit, false);
 
-  await store.update(first.id, { costGateway: true });
-  assert.equal(store.get(first.id).costGateway, true);
-  assert.equal(store.get(second.id).costGateway, false);
+  await store.update(excluded.id, { includeInProfit: true });
+  assert.equal(store.get(excluded.id).includeInProfit, true);
 });

@@ -558,7 +558,7 @@ export default function MyStationPage() {
             </ProCard>
           ) : null}
 
-          {/* 成本明细（按上游口径），区块标题与「未纳入成本的渠道」等保持一致 */}
+          {/* 成本明细：所有启用计入成本的监控上游，不依赖渠道 URL 是否匹配 */}
           {p.costs.length ? (
             <>
               <SectionHead title="成本明细" sub={`共 ${p.costs.length} 个纳入成本的上游 · 按各上游口径计入期内成本`} />
@@ -584,16 +584,16 @@ export default function MyStationPage() {
               style={{ marginTop: 14 }}
               type="warning"
               showIcon
-              message="没有渠道能匹配到监控中的站点（按 URL 比对），成本暂计 ¥0"
+              message="没有启用计入利润成本的上游，成本暂计 ¥0"
             />
           )}
 
-          {/* 未纳入成本的渠道 */}
+          {/* 未直接关联监控站的渠道，仅用于检查是否还有未监控成本 */}
           {p.unmatched.length ? (
             <>
               <SectionHead
-                title="未纳入成本的渠道"
-                sub={`共 ${p.unmatched.length} 个上游（按 URL 合并）· 加入监控并配好汇率即可参与利润计算`}
+                title="未直接关联监控站的渠道"
+                sub={`共 ${p.unmatched.length} 个渠道地址（按 URL 合并）· 监控列表中的上游成本已独立计入，此处仅用于检查是否还有未添加的外部上游`}
               />
               <ProCard>
                 {p.unmatched.map((u: any) => (

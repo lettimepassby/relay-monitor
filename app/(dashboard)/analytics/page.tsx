@@ -83,7 +83,7 @@ export default function AnalyticsPage() {
   // ---- 派生数据 ---------------------------------------------------------------
   const derived = useMemo(() => {
     if (!data) return null;
-    const upstream = data.stations.filter((s: any) => !s.isOwn);
+    const upstream = data.stations.filter((s: any) => !s.isOwn && s.includeInProfit !== false);
     const upstreamIds = new Set(upstream.map((s: any) => s.id));
 
     // 窗口内完整日期序列（缺日补 0，图表 x 轴连续）

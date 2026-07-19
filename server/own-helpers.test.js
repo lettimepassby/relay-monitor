@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mapCostChannels, matchCostStation, normalizeCostUrl, reconcileUsageCost } from "./own-helpers.js";
+import {
+  mapCostChannels, matchCostStation, normalizeCostUrl, reconcileUsageCost, selectCostUpstreams,
+} from "./own-helpers.js";
 
 test("成本渠道支持主地址、api 后缀和显式别名匹配", () => {
   const publicStation = { id: "public", baseUrl: "https://relay.example.com/" };
@@ -25,19 +27,20 @@ test("用量接口返回零但余额下降时改用历史成本", () => {
   });
 });
 
-test("成本汇总站承接全部渠道且不再匹配后层上游", () => {
-  const gateway = { id: "gateway", name: "自建 Sub2API", type: "sub2api-password", costGateway: true };
-  const downstream = { id: "upstream", name: "真实上游", type: "newapi", baseUrl: "https://upstream.example.com" };
-  const channels = [
-    { name: "统一入口", baseUrl: "http://sub2api-internal", status: 1, type: 1 },
-    { name: "另一个模型组", baseUrl: "http://sub2api-internal", status: 1, type: 1 },
-  ];
+test("未出现在 New API 渠道中的监控上游仍计入成本", () => {
+  const own = { id: "own", isOwn: true };
+  const visible = { id: "visible", baseUrl: "https://visible.example.com" };
+  const behindSub2Api = { id: "hidden", baseUrl: "https://hidden.example.com" };
+  const excluded = { id: "observe", baseUrl: "https://observe.example.com", includeInProfit: false };
+  const channels = [{ name: "Sub2API 统一入口", baseUrl: "http://sub2api-internal", status: 1, type: 1 }];
 
-  const result = mapCostChannels([gateway, downstream], channels);
-  assert.equal(result.gateway, gateway);
-  assert.deepEqual([...result.matched.keys()], [gateway.id]);
-  assert.deepEqual(result.matched.get(gateway.id).channels, ["统一入口", "另一个模型组"]);
-  assert.equal(result.unmatched.size, 0);
+  const selected = selectCostUpstreams([own, visible, behindSub2Api, excluded], own.id);
+  assert.deepEqual(selected.included.map((s) => s.id), [visible.id, behindSub2Api.id]);
+  assert.deepEqual(selected.excluded.map((s) => s.id), [excluded.id]);
+
+  const attribution = mapCostChannels(selected.included, channels);
+  assert.equal(attribution.matched.size, 0);
+  assert.equal(attribution.unmatched.size, 1);
 });
 
 test("用量接口有有效成本时保持接口口径", () => {

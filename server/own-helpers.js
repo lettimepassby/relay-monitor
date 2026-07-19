@@ -47,18 +47,7 @@ export function matchCostStation(upstreams, channelUrl) {
   return station;
 }
 
-// 单一成本汇总站代表完整的变量成本池：所有 New API 渠道归到它，后层上游不重复计费。
 export function mapCostChannels(upstreams, channels) {
-  const gateways = upstreams.filter((s) => !!s.costGateway && ["sub2api", "sub2api-password"].includes(s.type));
-  if (gateways.length === 1) {
-    const gateway = gateways[0];
-    return {
-      gateway,
-      matched: new Map([[gateway.id, { station: gateway, channels: channels.map((ch) => ch.name) }]]),
-      unmatched: new Map(),
-    };
-  }
-
   const matched = new Map();
   const unmatched = new Map();
   for (const ch of channels) {
@@ -77,7 +66,16 @@ export function mapCostChannels(upstreams, channels) {
       unmatched.set(label, entry);
     }
   }
-  return { gateway: null, matched, unmatched };
+  return { matched, unmatched };
+}
+
+// 成本纳入与 New API 渠道匹配解耦：列表中的监控上游默认全部计入。
+export function selectCostUpstreams(stations, ownId) {
+  const candidates = stations.filter((s) => s.id !== ownId);
+  return {
+    included: candidates.filter((s) => s.includeInProfit !== false),
+    excluded: candidates.filter((s) => s.includeInProfit === false),
+  };
 }
 
 // 部分 New API 部署会对 /api/data/self 返回成功空数组。余额明确下降时不能按零成本处理。
@@ -120,10 +118,9 @@ export async function computeResold(own, incomeUsd, adminUsageUsd, startMs, endM
 }
 
 /**
- * 利润 = 收入（下游消费 × 自有站售价汇率）− 成本（各匹配上游的期内成本）
- * 成本口径：配置了每月固定成本的上游按天摊销（月费 ÷ 30 × 窗口天数）；
- * 否则按上游用量接口的实际扣费 × 充值汇率；用量接口不可用时退回余额下降推算。
- * 渠道按 base_url 与监控站点匹配（忽略协议/末尾斜杠/是否带 /api）。
+ * 利润 = 收入（下游消费 × 自有站售价汇率）− 全部纳入成本的监控上游期内成本。
+ * 成本纳入不依赖 New API 渠道列表：固定付费按天摊销；其余按上游实际扣费 × 充值汇率，
+ * 用量接口返回 0 或不可用时退回余额下降推算。渠道 URL 匹配仅用于展示流量归属。
  */
 export async function computeProfit(rt, own, incomeUsd, adminUsageUsd, { startMs, now, tz, range, resold }) {
   const { store, history } = rt;
@@ -135,9 +132,8 @@ export async function computeProfit(rt, own, incomeUsd, adminUsageUsd, { startMs
       rt._ownChannelsCache = { at: Date.now(), stationId: own.id, list: await queryOwnChannels(own) };
     }
     const channels = rt._ownChannelsCache.list;
-    const upstreams = store.list().filter((s) => s.id !== own.id);
-
-    const { gateway, matched, unmatched } = mapCostChannels(upstreams, channels);
+    const { included: upstreams, excluded: excludedUpstreams } = selectCostUpstreams(store.list(), own.id);
+    const { matched, unmatched } = mapCostChannels(upstreams, channels);
 
     const windowDays = (now - startMs) / 86400000;
     const rateOf = (s) => (s.cnyPerUsd != null && s.cnyPerUsd > 0 ? s.cnyPerUsd : 1);
@@ -172,15 +168,17 @@ export async function computeProfit(rt, own, incomeUsd, adminUsageUsd, { startMs
       }
       costs.push({
         stationId: s.id, name: s.name, mode: "fixed", note,
-        channels: matched.get(s.id)?.channels || ["未匹配渠道 · 通用成本"],
+        channels: matched.get(s.id)?.channels || ["未直接出现在 New API 渠道 · 按固定成本计费"],
         cny: r2(cnySum),
       });
     }
-    // 按用量：匹配到渠道且未配置固定成本的上游
+    // 按用量：所有纳入成本、且未配置固定成本的监控上游。
+    // 是否出现在 New API 渠道列表只影响归属说明，不影响成本纳入。
     const usageCosts = await Promise.all(
-      [...matched.values()]
-        .filter(({ station }) => fixedPurchases(station).length === 0 && station.type !== "fixed")
-        .map(async ({ station, channels: chNames }) => {
+      upstreams
+        .filter((station) => fixedPurchases(station).length === 0 && station.type !== "fixed")
+        .map(async (station) => {
+          const chNames = matched.get(station.id)?.channels || ["未直接出现在 New API 渠道 · 按监控数据计费"];
           const item = { stationId: station.id, name: station.name, channels: chNames };
           try {
             const u = await queryStationUsage(station, {
@@ -215,10 +213,10 @@ export async function computeProfit(rt, own, incomeUsd, adminUsageUsd, { startMs
       .filter((s, i, all) => (s.cnyPerUsd == null || s.cnyPerUsd <= 0) && all.findIndex((x) => x.id === s.id) === i)
       .map((s) => s.name);
     const warnings = [];
-    if (unmatchedEnabled) warnings.push(`${unmatchedEnabled} 个启用渠道尚未匹配监控站，其成本未计入`);
-    if (gateway) warnings.push(`用量成本由 ${gateway.name} 汇总，其负载均衡后的上游不重复计入`);
+    if (unmatchedEnabled) warnings.push(`${unmatchedEnabled} 个启用渠道未直接关联监控站；全部监控上游仍已独立计入成本`);
     if (estimatedCosts) warnings.push(`${estimatedCosts} 个上游使用余额历史推算成本`);
     if (defaultRateStations.length) warnings.push(`${defaultRateStations.join("、")} 未配置汇率，当前按 1:1 折算`);
+    if (excludedUpstreams.length) warnings.push(`${excludedUpstreams.map((s) => s.name).join("、")} 已设置为不计入利润成本`);
     return {
       incomeCny, totalCostCny,
       adminUsageCny: r2((adminUsageUsd || 0) * ownRate),
@@ -229,9 +227,9 @@ export async function computeProfit(rt, own, incomeUsd, adminUsageUsd, { startMs
       marginPct: incomeCny > 0 ? Math.round(((incomeCny - totalCostCny) / incomeCny) * 1000) / 10 : null,
       costs: costs.sort((a, b) => b.cny - a.cny),
       unmatched: unmatchedList,
-      complete: unmatchedEnabled === 0 && defaultRateStations.length === 0,
+      complete: defaultRateStations.length === 0,
       estimated: estimatedCosts > 0,
-      costGateway: gateway ? { stationId: gateway.id, name: gateway.name } : null,
+      excludedStationIds: excludedUpstreams.map((s) => s.id),
       warnings,
       windowDays: Math.round(windowDays * 10) / 10,
     };

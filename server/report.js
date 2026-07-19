@@ -161,7 +161,7 @@ export async function buildReport(rt) {
     L.push("■ 成本明细（昨日）");
     const MODE = { usage: "按用量", fixed: "固定摊销", history: "余额推算≈" };
     profit.costs.forEach((c) => L.push(`- ${c.name}  ${rptCny(c.cny)}（${MODE[c.mode] || c.mode}${c.note ? " · " + c.note : ""}）`));
-    if (profit.unmatched.length) L.push(`（另有 ${profit.unmatched.length} 组渠道未纳入成本计算）`);
+    if (profit.unmatched.length) L.push(`（另有 ${profit.unmatched.length} 组渠道未直接关联监控站；监控上游成本已独立计入）`);
   }
   L.push("");
   L.push("■ 上游余额");
@@ -257,7 +257,7 @@ function buildReportHtml(rt, d) {
           <td style="${font}font-size:12px;color:${C.ink}">${esc(c.name)} <span style="color:${C.sub};font-size:11px">${esc(MODE[c.mode] || c.mode)}${c.note ? " · " + esc(c.note) : ""}</span></td>
           <td align="right" style="${font}font-size:12px;font-weight:600;color:${C.ink}">${esc(money(c.cny))}</td>
         </tr></table>`).join("")}
-      ${d.profit.unmatched.length ? `<div style="${font}font-size:11px;color:${C.sub};margin:6px 0">另有 ${d.profit.unmatched.length} 组渠道未纳入成本计算</div>` : ""}
+      ${d.profit.unmatched.length ? `<div style="${font}font-size:11px;color:${C.sub};margin:6px 0">另有 ${d.profit.unmatched.length} 组渠道未直接关联监控站；监控上游成本已独立计入</div>` : ""}
     </div>` : "";
   const profitWarnings = d.profit?.warnings?.length
     ? `<div style="${font}font-size:11px;color:${C.red};line-height:1.8">口径提示：${esc(d.profit.warnings.join("；"))}</div>`

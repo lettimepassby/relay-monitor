@@ -99,7 +99,9 @@ export class Store {
       // v2.1：旧站点没有续费计划字段，默认保持原有的正常重复提醒策略。
       s.noRenewal = !!s.noRenewal;
       s.costAliases = sanitizeCostAliases(s.costAliases);
-      s.costGateway = ["sub2api", "sub2api-password"].includes(s.type) && !!s.costGateway;
+      // 所有监控上游默认计入利润成本；仅显式关闭的观察/重复汇总节点排除。
+      s.includeInProfit = s.includeInProfit !== false;
+      delete s.costGateway;
       if (!Array.isArray(s.fixedPurchases)) {
         s.fixedPurchases = [];
         const amount = s.fixedCostCny ?? s.fixedMonthlyCny;
@@ -290,8 +292,8 @@ export class Store {
       cnyPerUsd: numOrNull(input.cnyPerUsd),
       // 自有站渠道可能使用容器域名、内网 IP 等地址；别名参与利润成本归属匹配。
       costAliases: sanitizeCostAliases(input.costAliases),
-      // 成本汇总站：其 actual_cost 已覆盖后面的负载均衡上游，利润中只计这一层。
-      costGateway: ["sub2api", "sub2api-password"].includes(input.type) && !!input.costGateway,
+      // 即使不出现在 New API 渠道列表，也按本站用量/余额下降计入利润成本。
+      includeInProfit: input.includeInProfit !== false,
       // 我自己的中转站：启用「我的站点」下游用量分析（需管理员令牌）
       isOwn: !!input.isOwn,
       // 不再续费：余额低于阈值时仅提醒一次，不再发送耗尽/ETA/持续余额提醒
@@ -306,9 +308,6 @@ export class Store {
       alertState: null, // 告警去重状态（含不再续费站点的一次性低余额提醒时间）
       balance: null, // 最近一次查询结果
     };
-    if (station.costGateway) {
-      for (const s of this.data.stations) s.costGateway = false;
-    }
     this.data.stations.push(station);
     await this.save();
     return station;
@@ -327,12 +326,7 @@ export class Store {
     if ("lowBalanceUsd" in patch) s.lowBalanceUsd = numOrNull(patch.lowBalanceUsd);
     if ("cnyPerUsd" in patch) s.cnyPerUsd = numOrNull(patch.cnyPerUsd);
     if ("costAliases" in patch) s.costAliases = sanitizeCostAliases(patch.costAliases);
-    if ("costGateway" in patch || !["sub2api", "sub2api-password"].includes(s.type)) {
-      s.costGateway = ["sub2api", "sub2api-password"].includes(s.type) && !!patch.costGateway;
-      if (s.costGateway) {
-        for (const other of this.data.stations) if (other.id !== s.id) other.costGateway = false;
-      }
-    }
+    if ("includeInProfit" in patch) s.includeInProfit = patch.includeInProfit !== false;
     if ("isOwn" in patch) s.isOwn = !!patch.isOwn;
     if ("noRenewal" in patch || s.type === "fixed") {
       const noRenewal = s.type !== "fixed" && !!patch.noRenewal;

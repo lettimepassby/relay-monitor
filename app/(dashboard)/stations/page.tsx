@@ -252,7 +252,7 @@ function StationRow(props: {
         <div style={{ fontWeight: 600 }}>
           {s.name}
           {s.isOwn ? <Tag color="blue" style={{ marginInlineStart: 6 }}>我的站</Tag> : null}
-          {s.costGateway ? <Tag color="cyan" style={{ marginInlineStart: 6 }}>成本汇总站</Tag> : null}
+          {s.includeInProfit === false ? <Tag style={{ marginInlineStart: 6 }}>不计利润成本</Tag> : null}
           {s.noRenewal ? <Tag color="orange" style={{ marginInlineStart: 6 }}>不再续费</Tag> : null}
           {s.demo ? <Tag style={{ marginInlineStart: 6 }}>演示</Tag> : null}
           {statusPill(st)}
@@ -396,7 +396,7 @@ export default function StationsPage() {
       lowBalanceUsd: station?.lowBalanceUsd ?? "",
       cnyPerUsd: station?.cnyPerUsd ?? "",
       costAliasesText: Array.isArray(station?.costAliases) ? station.costAliases.join("\n") : "",
-      costGateway: !!station?.costGateway,
+      includeInProfit: station?.includeInProfit !== false,
       isOwn: !!station?.isOwn,
       noRenewal: !!station?.noRenewal,
     });
@@ -424,7 +424,7 @@ export default function StationsPage() {
         .split(/[\n,]/)
         .map((x) => x.trim())
         .filter(Boolean),
-      costGateway: String(v.type || "").startsWith("sub2api") && !!v.costGateway,
+      includeInProfit: !!v.includeInProfit,
       // 金额/天数保持字符串提交（同 v1 collectPurchases），全空行剔除
       fixedPurchases: purchases
         .map((p) => ({
@@ -587,16 +587,16 @@ export default function StationsPage() {
               <Input placeholder="如 2 表示 $1 = ¥2，留空按 1:1" />
             </Form.Item>
           )}
-          {String(formType || "").startsWith("sub2api") && (
-            <Form.Item
-              name="costGateway"
-              valuePropName="checked"
-              style={{ marginBottom: 12 }}
-              extra="适用于 New API 只连接这一个 Sub2API 负载均衡入口的架构。利润只采用本站 actual_cost 作为全部用量成本，其后的监控上游不会重复计入。全局只能设置一个。"
-            >
-              <Checkbox>这是成本汇总站</Checkbox>
-            </Form.Item>
-          )}
+          <Form.Item
+            name="includeInProfit"
+            valuePropName="checked"
+            style={{ marginBottom: 12 }}
+            extra={isFixed
+              ? "固定付费默认按天摊销计入利润成本；纯观察或不属于当前业务时关闭。"
+              : "默认计入：即使本站不出现在 New API 渠道列表、只存在于外层 Sub2API 的内部负载均衡中，也会按用量或余额下降计入成本。仅纯观察节点或会造成重复汇总时关闭。"}
+          >
+            <Checkbox>计入利润成本</Checkbox>
+          </Form.Item>
           {!isFixed && (
             <Form.Item
               label="成本渠道匹配别名"
