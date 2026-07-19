@@ -9,7 +9,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test": "node --test lib/alerts.test.js db/store.test.js",
+    "test": "node --test lib/alerts.test.js db/store.test.js server/own-helpers.test.js",
     "db:migrate": "node db/migrate.js"
   },
   "dependencies": {

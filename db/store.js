@@ -22,6 +22,12 @@ function numOrNull(v) {
   return Number.isFinite(n) ? n : null;
 }
 
+// 成本渠道匹配别名：用于渠道配置采用容器域名/IP、与监控地址不一致的场景。
+function sanitizeCostAliases(input) {
+  const rows = Array.isArray(input) ? input : String(input || "").split(/[\n,]/);
+  return [...new Set(rows.map((v) => String(v || "").trim()).filter(Boolean))];
+}
+
 // 固定成本付费记录：[{amount(¥), days, startDate|null}]，无效行直接丢弃
 function sanitizePurchases(input) {
   if (!Array.isArray(input)) return null;
@@ -92,6 +98,8 @@ export class Store {
     for (const s of this.data.stations) {
       // v2.1：旧站点没有续费计划字段，默认保持原有的正常重复提醒策略。
       s.noRenewal = !!s.noRenewal;
+      s.costAliases = sanitizeCostAliases(s.costAliases);
+      s.costGateway = ["sub2api", "sub2api-password"].includes(s.type) && !!s.costGateway;
       if (!Array.isArray(s.fixedPurchases)) {
         s.fixedPurchases = [];
         const amount = s.fixedCostCny ?? s.fixedMonthlyCny;
@@ -280,6 +288,10 @@ export class Store {
       lowBalanceUsd: numOrNull(input.lowBalanceUsd),
       // 充值折算汇率：站点 $1 折合人民币（¥）；null 按 1:1 展示
       cnyPerUsd: numOrNull(input.cnyPerUsd),
+      // 自有站渠道可能使用容器域名、内网 IP 等地址；别名参与利润成本归属匹配。
+      costAliases: sanitizeCostAliases(input.costAliases),
+      // 成本汇总站：其 actual_cost 已覆盖后面的负载均衡上游，利润中只计这一层。
+      costGateway: ["sub2api", "sub2api-password"].includes(input.type) && !!input.costGateway,
       // 我自己的中转站：启用「我的站点」下游用量分析（需管理员令牌）
       isOwn: !!input.isOwn,
       // 不再续费：余额低于阈值时仅提醒一次，不再发送耗尽/ETA/持续余额提醒
@@ -294,6 +306,9 @@ export class Store {
       alertState: null, // 告警去重状态（含不再续费站点的一次性低余额提醒时间）
       balance: null, // 最近一次查询结果
     };
+    if (station.costGateway) {
+      for (const s of this.data.stations) s.costGateway = false;
+    }
     this.data.stations.push(station);
     await this.save();
     return station;
@@ -311,6 +326,13 @@ export class Store {
     if ("password" in patch) s.password = String(patch.password ?? "");
     if ("lowBalanceUsd" in patch) s.lowBalanceUsd = numOrNull(patch.lowBalanceUsd);
     if ("cnyPerUsd" in patch) s.cnyPerUsd = numOrNull(patch.cnyPerUsd);
+    if ("costAliases" in patch) s.costAliases = sanitizeCostAliases(patch.costAliases);
+    if ("costGateway" in patch || !["sub2api", "sub2api-password"].includes(s.type)) {
+      s.costGateway = ["sub2api", "sub2api-password"].includes(s.type) && !!patch.costGateway;
+      if (s.costGateway) {
+        for (const other of this.data.stations) if (other.id !== s.id) other.costGateway = false;
+      }
+    }
     if ("isOwn" in patch) s.isOwn = !!patch.isOwn;
     if ("noRenewal" in patch || s.type === "fixed") {
       const noRenewal = s.type !== "fixed" && !!patch.noRenewal;

@@ -252,6 +252,7 @@ function StationRow(props: {
         <div style={{ fontWeight: 600 }}>
           {s.name}
           {s.isOwn ? <Tag color="blue" style={{ marginInlineStart: 6 }}>我的站</Tag> : null}
+          {s.costGateway ? <Tag color="cyan" style={{ marginInlineStart: 6 }}>成本汇总站</Tag> : null}
           {s.noRenewal ? <Tag color="orange" style={{ marginInlineStart: 6 }}>不再续费</Tag> : null}
           {s.demo ? <Tag style={{ marginInlineStart: 6 }}>演示</Tag> : null}
           {statusPill(st)}
@@ -394,6 +395,8 @@ export default function StationsPage() {
       password: "",
       lowBalanceUsd: station?.lowBalanceUsd ?? "",
       cnyPerUsd: station?.cnyPerUsd ?? "",
+      costAliasesText: Array.isArray(station?.costAliases) ? station.costAliases.join("\n") : "",
+      costGateway: !!station?.costGateway,
       isOwn: !!station?.isOwn,
       noRenewal: !!station?.noRenewal,
     });
@@ -417,6 +420,11 @@ export default function StationsPage() {
       email: String(v.email || "").trim(),
       lowBalanceUsd: String(v.lowBalanceUsd ?? "").trim(),
       cnyPerUsd: String(v.cnyPerUsd ?? "").trim(),
+      costAliases: String(v.costAliasesText || "")
+        .split(/[\n,]/)
+        .map((x) => x.trim())
+        .filter(Boolean),
+      costGateway: String(v.type || "").startsWith("sub2api") && !!v.costGateway,
       // 金额/天数保持字符串提交（同 v1 collectPurchases），全空行剔除
       fixedPurchases: purchases
         .map((p) => ({
@@ -577,6 +585,26 @@ export default function StationsPage() {
               extra="面板金额将按此汇率折算成人民币展示；余额告警仍按站点余额判断。"
             >
               <Input placeholder="如 2 表示 $1 = ¥2，留空按 1:1" />
+            </Form.Item>
+          )}
+          {String(formType || "").startsWith("sub2api") && (
+            <Form.Item
+              name="costGateway"
+              valuePropName="checked"
+              style={{ marginBottom: 12 }}
+              extra="适用于 New API 只连接这一个 Sub2API 负载均衡入口的架构。利润只采用本站 actual_cost 作为全部用量成本，其后的监控上游不会重复计入。全局只能设置一个。"
+            >
+              <Checkbox>这是成本汇总站</Checkbox>
+            </Form.Item>
+          )}
+          {!isFixed && (
+            <Form.Item
+              label="成本渠道匹配别名"
+              name="costAliasesText"
+              style={{ marginBottom: 12 }}
+              extra="当自有站渠道使用容器域名、内网 IP 或代理地址时，每行填写一个渠道地址；利润计算会将它们归属到此上游。"
+            >
+              <Input.TextArea autoSize={{ minRows: 2, maxRows: 4 }} placeholder={"例如：sub2api-internal\n10.0.0.8:8080"} />
             </Form.Item>
           )}
           {!isFixed && (

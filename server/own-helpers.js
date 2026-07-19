@@ -20,6 +20,76 @@ export async function getOwnUsers(rt, own) {
   return rt._ownUsersCache.list;
 }
 
+export function normalizeCostUrl(url) {
+  return String(url || "").trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/+$/, "");
+}
+
+function costMatchScore(stUrl, chUrl) {
+  if (!stUrl || !chUrl) return 0;
+  if (stUrl === chUrl) return 3;
+  if (stUrl === chUrl + "/api" || chUrl === stUrl + "/api") return 2;
+  const hostOf = (u) => u.split("/")[0].split(":")[0];
+  const isBareHost = (u) => !!u && !u.includes("/") && !u.includes(":");
+  return isBareHost(stUrl) && hostOf(chUrl) === stUrl ? 1 : 0;
+}
+
+// 返回与渠道地址最匹配的监控站；显式别名与站点主地址采用相同打分规则。
+export function matchCostStation(upstreams, channelUrl) {
+  const chUrl = normalizeCostUrl(channelUrl);
+  let station = null, best = 0;
+  for (const s of upstreams) {
+    const urls = [s.baseUrl, ...(Array.isArray(s.costAliases) ? s.costAliases : [])];
+    for (const url of urls) {
+      const score = costMatchScore(normalizeCostUrl(url), chUrl);
+      if (score > best) { best = score; station = s; }
+    }
+  }
+  return station;
+}
+
+// 单一成本汇总站代表完整的变量成本池：所有 New API 渠道归到它，后层上游不重复计费。
+export function mapCostChannels(upstreams, channels) {
+  const gateways = upstreams.filter((s) => !!s.costGateway && ["sub2api", "sub2api-password"].includes(s.type));
+  if (gateways.length === 1) {
+    const gateway = gateways[0];
+    return {
+      gateway,
+      matched: new Map([[gateway.id, { station: gateway, channels: channels.map((ch) => ch.name) }]]),
+      unmatched: new Map(),
+    };
+  }
+
+  const matched = new Map();
+  const unmatched = new Map();
+  for (const ch of channels) {
+    const cu = normalizeCostUrl(ch.baseUrl);
+    const station = matchCostStation(upstreams, cu);
+    if (station) {
+      const entry = matched.get(station.id) || { station, channels: [] };
+      entry.channels.push(ch.name);
+      matched.set(station.id, entry);
+    } else {
+      const label = cu || `官方 / 内置渠道（type ${ch.type}）`;
+      const entry = unmatched.get(label) || { label, names: [], enabled: 0, total: 0 };
+      entry.names.push(ch.name);
+      entry.total++;
+      if (ch.status === 1) entry.enabled++;
+      unmatched.set(label, entry);
+    }
+  }
+  return { gateway: null, matched, unmatched };
+}
+
+// 部分 New API 部署会对 /api/data/self 返回成功空数组。余额明确下降时不能按零成本处理。
+export function reconcileUsageCost(apiUsd, historyUsd) {
+  const api = Number.isFinite(Number(apiUsd)) ? Math.max(0, Number(apiUsd)) : 0;
+  const history = Number.isFinite(Number(historyUsd)) ? Math.max(0, Number(historyUsd)) : 0;
+  if (api <= 0 && history > 0) {
+    return { usd: history, mode: "history", note: "用量接口返回 0，已按余额历史推算" };
+  }
+  return { usd: api, mode: "usage", note: null };
+}
+
 /**
  * 转售的管理员/root Key 消费重归：从「管理员消耗（成本）」移入「下游收入」。
  * 对每个 (username, tokenName) 用日志统计接口取窗内消费额度（美元）后汇总。
@@ -65,42 +135,9 @@ export async function computeProfit(rt, own, incomeUsd, adminUsageUsd, { startMs
       rt._ownChannelsCache = { at: Date.now(), stationId: own.id, list: await queryOwnChannels(own) };
     }
     const channels = rt._ownChannelsCache.list;
-    const norm = (u) => String(u || "").toLowerCase().replace(/^https?:\/\//, "").replace(/\/+$/, "");
-    const hostOf = (u) => u.split("/")[0].split(":")[0];
-    const isBareHost = (u) => !!u && !u.includes("/") && !u.includes(":");
-    // 匹配打分：精确 > ±/api 后缀 > 裸主机（站点地址不带端口/路径时，
-    // 覆盖该主机所有端口——同一台机器跑多个服务的场景）
-    const matchScore = (stUrl, chUrl) => {
-      if (!stUrl || !chUrl) return 0;
-      if (stUrl === chUrl) return 3;
-      if (stUrl === chUrl + "/api" || chUrl === stUrl + "/api") return 2;
-      if (isBareHost(stUrl) && hostOf(chUrl) === stUrl) return 1;
-      return 0;
-    };
     const upstreams = store.list().filter((s) => s.id !== own.id);
 
-    const matched = new Map(); // stationId -> {station, channels[]}
-    const unmatched = new Map(); // label -> {label, names[], enabled, total}
-    for (const ch of channels) {
-      const cu = norm(ch.baseUrl);
-      let st = null, best = 0;
-      for (const s of upstreams) {
-        const score = matchScore(norm(s.baseUrl), cu);
-        if (score > best) { best = score; st = s; }
-      }
-      if (st) {
-        const e = matched.get(st.id) || { station: st, channels: [] };
-        e.channels.push(ch.name);
-        matched.set(st.id, e);
-      } else {
-        const label = cu || `官方 / 内置渠道（type ${ch.type}）`;
-        const e = unmatched.get(label) || { label, names: [], enabled: 0, total: 0 };
-        e.names.push(ch.name);
-        e.total++;
-        if (ch.status === 1) e.enabled++;
-        unmatched.set(label, e);
-      }
-    }
+    const { gateway, matched, unmatched } = mapCostChannels(upstreams, channels);
 
     const windowDays = (now - startMs) / 86400000;
     const rateOf = (s) => (s.cnyPerUsd != null && s.cnyPerUsd > 0 ? s.cnyPerUsd : 1);
@@ -149,10 +186,17 @@ export async function computeProfit(rt, own, incomeUsd, adminUsageUsd, { startMs
             const u = await queryStationUsage(station, {
               startMs, endMs: now, granularity: "day", tz, wantToday: range === "today",
             });
-            const usd = range === "today" && u.summary ? u.summary.cost : u.models.reduce((a, m) => a + m.cost, 0);
-            return { ...item, mode: "usage", cny: r2(usd * rateOf(station)) };
-          } catch {
-            return { ...item, mode: "history", cny: r2(history.usedSince(station.id, startMs) * rateOf(station)) };
+            const apiUsd = range === "today" && u.summary ? u.summary.cost : u.models.reduce((a, m) => a + m.cost, 0);
+            const selected = reconcileUsageCost(apiUsd, history.usedSince(station.id, startMs));
+            return { ...item, ...selected, cny: r2(selected.usd * rateOf(station)) };
+          } catch (err) {
+            const usd = history.usedSince(station.id, startMs);
+            return {
+              ...item, mode: "history", usd,
+              note: "用量接口失败，已按余额历史推算",
+              error: err?.message || String(err),
+              cny: r2(usd * rateOf(station)),
+            };
           }
         })
     );
@@ -161,6 +205,20 @@ export async function computeProfit(rt, own, incomeUsd, adminUsageUsd, { startMs
     const ownRate = own.cnyPerUsd != null && own.cnyPerUsd > 0 ? own.cnyPerUsd : 1;
     const incomeCny = r2(incomeUsd * ownRate);
     const totalCostCny = r2(costs.reduce((a, c) => a + c.cny, 0));
+    const unmatchedList = [...unmatched.values()].sort((a, b) => b.enabled - a.enabled || b.total - a.total);
+    const unmatchedEnabled = unmatchedList.reduce((a, x) => a + x.enabled, 0);
+    const estimatedCosts = costs.filter((c) => c.mode === "history").length;
+    const defaultRateStations = [own, ...costs
+      .filter((c) => c.mode !== "fixed")
+      .map((c) => upstreams.find((s) => s.id === c.stationId))
+      .filter(Boolean)]
+      .filter((s, i, all) => (s.cnyPerUsd == null || s.cnyPerUsd <= 0) && all.findIndex((x) => x.id === s.id) === i)
+      .map((s) => s.name);
+    const warnings = [];
+    if (unmatchedEnabled) warnings.push(`${unmatchedEnabled} 个启用渠道尚未匹配监控站，其成本未计入`);
+    if (gateway) warnings.push(`用量成本由 ${gateway.name} 汇总，其负载均衡后的上游不重复计入`);
+    if (estimatedCosts) warnings.push(`${estimatedCosts} 个上游使用余额历史推算成本`);
+    if (defaultRateStations.length) warnings.push(`${defaultRateStations.join("、")} 未配置汇率，当前按 1:1 折算`);
     return {
       incomeCny, totalCostCny,
       adminUsageCny: r2((adminUsageUsd || 0) * ownRate),
@@ -170,7 +228,11 @@ export async function computeProfit(rt, own, incomeUsd, adminUsageUsd, { startMs
       profitCny: r2(incomeCny - totalCostCny),
       marginPct: incomeCny > 0 ? Math.round(((incomeCny - totalCostCny) / incomeCny) * 1000) / 10 : null,
       costs: costs.sort((a, b) => b.cny - a.cny),
-      unmatched: [...unmatched.values()].sort((a, b) => b.enabled - a.enabled || b.total - a.total),
+      unmatched: unmatchedList,
+      complete: unmatchedEnabled === 0 && defaultRateStations.length === 0,
+      estimated: estimatedCosts > 0,
+      costGateway: gateway ? { stationId: gateway.id, name: gateway.name } : null,
+      warnings,
       windowDays: Math.round(windowDays * 10) / 10,
     };
   } catch (err) {

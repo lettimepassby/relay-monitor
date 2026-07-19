@@ -417,6 +417,15 @@ export default function MyStationPage() {
       ) : null}
       {p && !p.error ? (
         <>
+          {p.warnings?.length ? (
+            <Alert
+              style={{ marginTop: 14 }}
+              type={p.complete ? "info" : "warning"}
+              showIcon
+              message={!p.complete ? "利润数据尚不完整" : p.estimated ? "成本中包含估算值" : "利润口径提示"}
+              description={p.warnings.join("；")}
+            />
+          ) : null}
           <SectionHead
             title="利润分析"
             sub={`收入 = 普通用户消费 × 售价汇率（不含管理员/root，除非该 Key 已标为转售）· 成本按各上游口径（窗口 ${p.windowDays} 天）`}
@@ -560,7 +569,7 @@ export default function MyStationPage() {
                     name={
                       <>
                         {c.name} <Tag>{MODE_LABEL[c.mode] || c.mode}</Tag>
-                        {c.note ? <Tag color={c.note === "已到期" ? "warning" : undefined}>{c.note}</Tag> : null}
+                        {c.note ? <Tag color={c.mode === "history" || c.note === "已到期" ? "warning" : undefined}>{c.note}</Tag> : null}
                       </>
                     }
                     meta={`渠道：${c.channels.join("、")}`}

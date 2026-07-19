@@ -143,6 +143,7 @@ export async function buildReport(rt) {
   L.push(`收入(不含管理员)：${rptCny(incomeUsd * ownRate)} ｜ 管理员消耗：${rptCny(adminUsd * ownRate)}`);
   if (profit && !profit.error) {
     L.push(`成本：${rptCny(profit.totalCostCny)} ｜ 利润：${rptCny(profit.profitCny)}${profit.marginPct != null ? `（利润率 ${profit.marginPct}%）` : ""}`);
+    if (profit.warnings?.length) L.push(`口径提示：${profit.warnings.join("；")}`);
   }
   L.push("");
   L.push("■ 用量");
@@ -258,6 +259,9 @@ function buildReportHtml(rt, d) {
         </tr></table>`).join("")}
       ${d.profit.unmatched.length ? `<div style="${font}font-size:11px;color:${C.sub};margin:6px 0">另有 ${d.profit.unmatched.length} 组渠道未纳入成本计算</div>` : ""}
     </div>` : "";
+  const profitWarnings = d.profit?.warnings?.length
+    ? `<div style="${font}font-size:11px;color:${C.red};line-height:1.8">口径提示：${esc(d.profit.warnings.join("；"))}</div>`
+    : "";
 
   const upRows = `<div style="background:#fff;border:1px solid ${C.line};border-radius:10px;padding:6px 14px">
     ${d.upstreams.map((s) => {
@@ -300,6 +304,7 @@ function buildReportHtml(rt, d) {
     ${section(`用量：请求 ${d.totalReqs.toLocaleString("en-US")} 次 · Tokens ${rptTok(d.totalTokens)} · 活跃用户 ${d.activeUsers} 个`, "")}
     ${section("Top 模型（按消费）", modelBars)}
     ${section("Top 用户（按消费）", userBars)}
+    ${profitWarnings ? section("利润口径", profitWarnings) : ""}
     ${costRows ? section("成本明细（昨日）", costRows) : ""}
     ${section("上游余额", upRows)}
     ${d.hasUsers ? section(`用户余额合计：${money(d.balanceTotal)}（预收 · ${d.userCount} 个用户）`, "") : ""}
