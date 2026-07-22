@@ -76,3 +76,42 @@ test("监控上游默认计入利润成本并可显式排除", async () => {
   await store.update(excluded.id, { includeInProfit: true });
   assert.equal(store.get(excluded.id).includeInProfit, true);
 });
+
+test("渠道绑定：只接受存在的渠道 id，字段级合并", async () => {
+  const store = new Store(fakePool());
+  store.data.notifications.channels = [
+    { id: "ch-1", name: "A", type: "webhook", enabled: true },
+    { id: "ch-2", name: "B", type: "webhook", enabled: true },
+  ];
+  const r1 = await store.updateRules({ channelsFor: { low: ["ch-1", "bogus"], eta: ["ch-2"] } });
+  assert.deepEqual(r1.channelsFor.low, ["ch-1"]);
+  assert.deepEqual(r1.channelsFor.eta, ["ch-2"]);
+  assert.deepEqual(r1.channelsFor.exhaust, []);
+  // 只更新载荷里出现的键，其余绑定保持
+  const r2 = await store.updateRules({ channelsFor: { exhaust: ["ch-2"] } });
+  assert.deepEqual(r2.channelsFor.low, ["ch-1"]);
+  assert.deepEqual(r2.channelsFor.exhaust, ["ch-2"]);
+});
+
+test("删除渠道时清理告警绑定与日报渠道里的死 id", async () => {
+  const store = new Store(fakePool());
+  store.data.notifications.channels = [
+    { id: "ch-1", name: "A", type: "webhook", enabled: true },
+    { id: "ch-2", name: "B", type: "webhook", enabled: true },
+  ];
+  await store.updateRules({ channelsFor: { low: ["ch-1", "ch-2"], error: ["ch-1"] } });
+  store.data.settings.dailyReport = { enabled: true, time: "09:00", channelIds: ["ch-1", "ch-2"], lastSent: null };
+
+  await store.removeChannel("ch-1");
+  assert.deepEqual(store.rules.channelsFor.low, ["ch-2"]);
+  assert.deepEqual(store.rules.channelsFor.error, []);
+  assert.deepEqual(store.settings.dailyReport.channelIds, ["ch-2"]);
+});
+
+test("加载旧规则时补齐渠道绑定字段且不共享默认对象", async () => {
+  const a = await new Store(fakePool()).load();
+  const b = await new Store(fakePool()).load();
+  assert.deepEqual(a.rules.channelsFor, { low: [], exhaust: [], error: [], recover: [], eta: [] });
+  a.rules.channelsFor.low.push("x");
+  assert.deepEqual(b.rules.channelsFor.low, []);
+});

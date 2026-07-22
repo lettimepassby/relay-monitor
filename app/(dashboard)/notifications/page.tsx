@@ -90,6 +90,8 @@ export default function NotificationsPage() {
   const [errThreshold, setErrThreshold] = useState("1");
   const [errRetry, setErrRetry] = useState("30");
   const [rulesSaving, setRulesSaving] = useState(false);
+  // 每类告警的推送渠道绑定（空 = 所有启用渠道）；选择即落库，与开关一致
+  const [channelsFor, setChannelsFor] = useState<Record<string, string[]>>({});
 
   // 每日日报表单
   const [drEnabled, setDrEnabled] = useState(false);
@@ -119,6 +121,7 @@ export default function NotificationsPage() {
     setRenotify(String(r?.renotifyHours ?? 24));
     setErrThreshold(String(r?.errorThreshold ?? 1));
     setErrRetry(String(r?.errorRetrySec ?? 30));
+    setChannelsFor(r?.channelsFor || {});
   };
 
   const syncDrForm = (s: any) => {
@@ -148,11 +151,13 @@ export default function NotificationsPage() {
   }, []);
 
   // 重新拉取渠道数据（对照 v1 loadNotifications）
+  // 同步渠道绑定（删除渠道时服务端会清理其中的死 id），但不动阈值输入表单
   const reloadChannels = async () => {
     const n = await api("/api/notifications");
     setChannels(n.channels);
     setRules(n.rules);
     setChannelTypes(n.channelTypes);
+    setChannelsFor(n.rules?.channelsFor || {});
   };
 
   // ---- 渠道操作 ---------------------------------------------------------------
@@ -288,6 +293,47 @@ export default function NotificationsPage() {
     }
   };
 
+  // 每类告警的渠道绑定：选择即落库；失败时回滚为服务端状态
+  const saveChannelsFor = async (key: string, ids: string[]) => {
+    setChannelsFor((cf) => ({ ...cf, [key]: ids }));
+    try {
+      const r = await api("/api/notifications/rules", {
+        method: "PUT",
+        body: { channelsFor: { [key]: ids } },
+      });
+      setRules(r.rules);
+      setChannelsFor(r.rules?.channelsFor || {});
+    } catch (e: any) {
+      message.error(e.message);
+      setChannelsFor(rules?.channelsFor || {});
+    }
+  };
+
+  // 告警规则行右侧：渠道多选（空 = 全部启用渠道）+ 开关
+  const alertChannelOptions = channels.map((c: any) => ({
+    value: c.id,
+    label: c.enabled === false ? `${c.name}（已停用）` : c.name,
+  }));
+  // 普通渲染函数而非内嵌组件：避免每次渲染产生新组件类型导致 Select 重挂、
+  // 多选下拉每选一项就被关闭
+  const renderAlertControls = (evKey: string, ruleKey: string) => (
+    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+      <Select
+        mode="multiple"
+        allowClear
+        style={{ minWidth: 200, maxWidth: 320 }}
+        placeholder="全部启用渠道"
+        maxTagCount="responsive"
+        optionFilterProp="label"
+        value={channelsFor[evKey] || []}
+        onChange={(ids) => saveChannelsFor(evKey, ids as string[])}
+        options={alertChannelOptions}
+        disabled={!channels.length}
+      />
+      <Switch checked={!!rules[ruleKey]} onChange={() => toggleRule(ruleKey)} />
+    </div>
+  );
+
   // 切换单位时把输入值换算过去（两个单位间必然是互换，对照 v1 rule-etaUnit onchange）
   const onEtaUnitChange = (u: "days" | "hours") => {
     const v = Number(etaVal);
@@ -395,7 +441,7 @@ export default function NotificationsPage() {
         title={<span style={{ whiteSpace: "nowrap", flexShrink: 0 }}>通知渠道</span>}
         extra={
           <Text type="secondary" style={{ fontSize: 12, whiteSpace: "normal", textAlign: "right" }}>
-            告警将同时推送到所有启用的渠道
+            在下方「告警规则」中可为每类告警单独选择推送渠道
           </Text>
         }
       >
@@ -451,20 +497,23 @@ export default function NotificationsPage() {
 
       {/* 告警规则 */}
       <ProCard title="告警规则" style={{ marginTop: 16 }}>
+        <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 4 }}>
+          每类告警可单独选择推送渠道；不选 = 发送到所有启用的渠道
+        </Text>
         <SetRow title="余额偏低" desc="剩余余额低于阈值时通知">
-          <Switch checked={!!r.onLow} onChange={() => toggleRule("onLow")} />
+          {renderAlertControls("low", "onLow")}
         </SetRow>
         <SetRow title="余额耗尽" desc="剩余余额归零时通知">
-          <Switch checked={!!r.onExhaust} onChange={() => toggleRule("onExhaust")} />
+          {renderAlertControls("exhaust", "onExhaust")}
         </SetRow>
         <SetRow title="查询失败" desc="接口查询出错时通知（令牌失效、站点宕机等）">
-          <Switch checked={!!r.onError} onChange={() => toggleRule("onError")} />
+          {renderAlertControls("error", "onError")}
         </SetRow>
         <SetRow title="恢复正常" desc="从异常状态恢复后通知">
-          <Switch checked={!!r.onRecover} onChange={() => toggleRule("onRecover")} />
+          {renderAlertControls("recover", "onRecover")}
         </SetRow>
         <SetRow title="耗尽预警" desc="按消耗速度预计即将耗尽时通知">
-          <Switch checked={!!r.onEta} onChange={() => toggleRule("onEta")} />
+          {renderAlertControls("eta", "onEta")}
         </SetRow>
         <SetRow title="耗尽预警阈值" desc="预计在该时间内耗尽则触发「耗尽预警」，可按天或小时设置">
           <div style={{ display: "flex", gap: 8 }}>
@@ -564,7 +613,7 @@ export default function NotificationsPage() {
         }
         destroyOnHidden
       >
-        <Text type="secondary">告警触发时将推送到所有启用的渠道。</Text>
+        <Text type="secondary">默认接收所有告警；可在「告警规则」中按告警类型指定渠道。</Text>
         <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 12 }}>
           <div>
             <div style={{ marginBottom: 4 }}>名称</div>

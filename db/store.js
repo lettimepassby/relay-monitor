@@ -2,7 +2,7 @@
 // 设计：内存缓存 this.data 保持 v1 数据形状，所有读走内存（同步 getter 不变），
 // 所有写通过 save() 串行化写透 MySQL——消费方（26 个端点/告警/日报）零改动。
 import { hashPassword } from "../lib/auth.js";
-import { DEFAULT_RULES } from "../lib/alerts.js";
+import { ALERT_EVENT_KEYS, DEFAULT_RULES } from "../lib/alerts.js";
 
 const DEFAULT_SETTINGS = {
   refreshIntervalSec: 60, // 后台自动刷新间隔
@@ -66,6 +66,17 @@ function asDoc(v) {
   return typeof v === "string" ? JSON.parse(v) : v;
 }
 
+// 每类告警的渠道绑定：归一化为 5 个事件键齐全的新对象（渠道 id 去重、字符串化）。
+// 始终返回新对象，避免共享/回写 DEFAULT_RULES.channelsFor。
+function sanitizeChannelsFor(input, base) {
+  const out = {};
+  for (const k of ALERT_EVENT_KEYS) {
+    const src = input && k in input ? input[k] : base?.[k];
+    out[k] = Array.isArray(src) ? [...new Set(src.map(String).filter(Boolean))] : [];
+  }
+  return out;
+}
+
 export class Store {
   constructor(pool) {
     this.pool = pool;
@@ -93,6 +104,9 @@ export class Store {
         rules: { ...DEFAULT_RULES, ...(meta.notifications?.rules || {}) },
       },
     };
+    // v2.2：旧规则没有渠道绑定字段；归一化成 5 个事件键齐全的独立对象
+    this.data.notifications.rules.channelsFor =
+      sanitizeChannelsFor(this.data.notifications.rules.channelsFor, null);
     // 迁移：历代固定成本字段（fixedMonthlyCny / fixedCostCny+fixedDays+fixedStartDate）
     // 统一为付费记录数组 fixedPurchases（v1 老数据经 db/migrate.js 导入时同样适用）
     for (const s of this.data.stations) {
@@ -245,6 +259,16 @@ export class Store {
   async removeChannel(id) {
     const n = this.data.notifications.channels.length;
     this.data.notifications.channels = this.data.notifications.channels.filter((c) => c.id !== id);
+    // 同步清理各处的渠道绑定，避免留下永远匹配不到的死 id
+    // （绑定清空后自动回落到「所有启用渠道」的默认语义）
+    const cf = this.data.notifications.rules.channelsFor;
+    if (cf) {
+      for (const k of ALERT_EVENT_KEYS) {
+        if (Array.isArray(cf[k])) cf[k] = cf[k].filter((x) => x !== id);
+      }
+    }
+    const dr = this.data.settings.dailyReport;
+    if (Array.isArray(dr?.channelIds)) dr.channelIds = dr.channelIds.filter((x) => x !== id);
     await this.save();
     return this.data.notifications.channels.length < n;
   }
@@ -263,6 +287,17 @@ export class Store {
     if ("renotifyHours" in patch) r.renotifyHours = Math.max(0, Number(patch.renotifyHours) || 0);
     if ("errorThreshold" in patch) r.errorThreshold = Math.max(1, Math.floor(Number(patch.errorThreshold) || 1));
     if ("errorRetrySec" in patch) r.errorRetrySec = Math.max(0, Math.floor(Number(patch.errorRetrySec) || 0));
+    if ("channelsFor" in patch && typeof patch.channelsFor === "object" && patch.channelsFor) {
+      // 字段级合并：只更新载荷里出现的事件键；仅接受当前存在的渠道 id
+      const valid = new Set(this.data.notifications.channels.map((c) => c.id));
+      const cleaned = {};
+      for (const k of ALERT_EVENT_KEYS) {
+        if (!(k in patch.channelsFor)) continue;
+        const v = patch.channelsFor[k];
+        cleaned[k] = Array.isArray(v) ? v.filter((x) => valid.has(String(x))) : [];
+      }
+      r.channelsFor = sanitizeChannelsFor(cleaned, r.channelsFor);
+    }
     await this.save();
     return r;
   }
