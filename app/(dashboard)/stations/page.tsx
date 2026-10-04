@@ -31,7 +31,7 @@ import dayjs from "dayjs";
 import { api, cny, usd, rateOf, fmtTokens, fmtEta, statusOf } from "../../../lib/client";
 
 // ---- 展示工具（v1 app.js 同名函数平移）--------------------------------------
-const PLATE: Record<string, string> = { newapi: "NA", "newapi-key": "KEY", sub2api: "S2", "sub2api-password": "S2" };
+const PLATE: Record<string, string> = { newapi: "NA", "newapi-key": "KEY", sub2api: "S2", "sub2api-password": "S2", jucode: "JC" };
 // 语义色（antd 色板值，两种主题下都可读）；中性色一律走 token
 const COLOR = { warn: "#faad14", danger: "#ff4d4f" };
 
@@ -74,6 +74,7 @@ const TYPE_HINTS: Record<string, string> = {
   "newapi-key": "任意可用的 sk- 密钥；通过 OpenAI 兼容计费接口查询额度。",
   sub2api: "Sub2API 登录后的访问令牌（JWT）；过期需手动更换，推荐用账号密码模式。",
   "sub2api-password": "填 Sub2API 的登录邮箱和密码，面板会自动登录并在令牌过期时自动续期；站点使用 Cap 验证码时也会自动完成验证。",
+  jucode: "JuCode 控制台「访问令牌」页创建的个人访问令牌（jcp- 开头），地址填 https://api.jucode.net；余额单位为积分（1 积分 = 1 元），汇率留空即可。",
   fixed: "包月 / 包年等定期投入的上游：不访问任何接口，只按天摊销计入利润成本。",
 };
 
@@ -545,7 +546,7 @@ export default function StationsPage() {
           </Form.Item>
           {needs.includes("accessToken") && (
             <Form.Item
-              label={String(formType || "").startsWith("sub2api") ? "登录令牌（JWT）" : "访问令牌"}
+              label={String(formType || "").startsWith("sub2api") ? "登录令牌（JWT）" : formType === "jucode" ? "个人访问令牌（jcp-…）" : "访问令牌"}
               name="accessToken"
               style={{ marginBottom: 12 }}
             >
