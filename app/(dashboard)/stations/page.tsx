@@ -31,7 +31,7 @@ import dayjs from "dayjs";
 import { api, cny, usd, rateOf, fmtTokens, fmtEta, statusOf } from "../../../lib/client";
 
 // ---- 展示工具（v1 app.js 同名函数平移）--------------------------------------
-const PLATE: Record<string, string> = { newapi: "NA", "newapi-key": "KEY", sub2api: "S2", "sub2api-password": "S2", jucode: "JC" };
+const PLATE: Record<string, string> = { newapi: "NA", "newapi-key": "KEY", sub2api: "S2", "sub2api-password": "S2", jucode: "JC", monoize: "MZ", "monoize-key": "MZ" };
 // 语义色（antd 色板值，两种主题下都可读）；中性色一律走 token
 const COLOR = { warn: "#faad14", danger: "#ff4d4f" };
 
@@ -75,6 +75,8 @@ const TYPE_HINTS: Record<string, string> = {
   sub2api: "Sub2API 登录后的访问令牌（JWT）；过期需手动更换，推荐用账号密码模式。",
   "sub2api-password": "填 Sub2API 的登录邮箱和密码，面板会自动登录并在令牌过期时自动续期；站点使用 Cap 验证码时也会自动完成验证。",
   jucode: "JuCode 控制台「访问令牌」页创建的个人访问令牌（jcp- 开头），地址填 https://api.jucode.net；余额单位为积分（1 积分 = 1 元），汇率留空即可。",
+  monoize: "填 Monoize 控制台的登录用户名和密码，面板会自动登录、会话失效时自动重登；站点开启 Cap 验证码时也会自动完成验证。余额为美元，可读取累计消费、今日消耗与用量统计。",
+  "monoize-key": "Monoize 控制台「API Keys」里任意可用的 Key；只能读取余额（启用子账户的 Key 读取的是子账户余额），没有消费与用量明细。",
   fixed: "包月 / 包年等定期投入的上游：不访问任何接口，只按天摊销计入利润成本。",
 };
 
@@ -564,8 +566,8 @@ export default function StationsPage() {
             </Form.Item>
           )}
           {needs.includes("email") && (
-            <Form.Item label="登录邮箱" name="email" style={{ marginBottom: 12 }}>
-              <Input placeholder="you@example.com" />
+            <Form.Item label={formType === "monoize" ? "登录用户名" : "登录邮箱"} name="email" style={{ marginBottom: 12 }}>
+              <Input placeholder={formType === "monoize" ? "username" : "you@example.com"} />
             </Form.Item>
           )}
           {needs.includes("password") && (

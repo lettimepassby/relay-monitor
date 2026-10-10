@@ -30,7 +30,7 @@ function CardTitle({ title, sub }: { title: string; sub: string }) {
 // ---- v1 工具函数平移（app.js 同名实现，行为逐字对齐）------------------------
 
 // 站点类型徽标缩写（app.js PLATE）
-const PLATE: Record<string, string> = { newapi: "NA", "newapi-key": "KEY", sub2api: "S2", "sub2api-password": "S2", jucode: "JC" };
+const PLATE: Record<string, string> = { newapi: "NA", "newapi-key": "KEY", sub2api: "S2", "sub2api-password": "S2", jucode: "JC", monoize: "MZ", "monoize-key": "MZ" };
 
 // 相对时间（app.js relTime）
 function relTime(iso: string | null | undefined): string {
