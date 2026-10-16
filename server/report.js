@@ -331,22 +331,60 @@ export async function sendReport(rt, channelIds) {
   return { ok: true, results };
 }
 
-// 调度：每 30 秒按日报时区检查（HH:MM 命中且当天未发送）
+// 定时日报失败不丢当天：每 5 分钟重试，共 REPORT_MAX_ATTEMPTS 次（约 1 小时），全部失败再推送失败通知。
+// lastSent 只在发送成功（或放弃当天）后写入；重试进度只放内存，进程重启后不续。
+export const REPORT_RETRY_MS = 5 * 60 * 1000;
+export const REPORT_MAX_ATTEMPTS = 12;
+
+// 单次调度检查：到点（HH:MM 命中）或到了重试时间，且当天未发送。deps 供测试注入。
+export async function tickDailyReport(rt, now = Date.now(), { build = buildReport, send = broadcast } = {}) {
+  const cfg = rt.store.settings.dailyReport;
+  if (!cfg?.enabled || !cfg.time || rt._reportSending) return;
+  const { hhmm, today } = reportClock(now);
+  if (cfg.lastSent === today) return;
+  const retry = rt._reportRetry?.day === today ? rt._reportRetry : null;
+  if (retry ? now < retry.nextAt : hhmm !== cfg.time) return;
+
+  rt._reportSending = true; // 构建可能超过 30 秒，防止下一拍重入
+  const attempt = (retry?.attempts || 0) + 1;
+  const channels = reportChannels(rt);
+  try {
+    const { title, text, html } = await build(rt);
+    const results = await send(channels, title, text, { event: "daily-report", html });
+    // 配了渠道却一个都没发出去，同样按失败重试
+    if (results.length && !results.some((r) => r.ok)) {
+      throw new Error("所有渠道发送失败：" + results.map((r) => `${r.name || r.id} ${r.error || ""}`.trim()).join("；"));
+    }
+    cfg.lastSent = today;
+    rt._reportRetry = null;
+    await rt.store.save();
+    console.log(`日报已发送（${today} ${cfg.time}${attempt > 1 ? `，第 ${attempt} 次尝试` : ""}）`);
+  } catch (err) {
+    const msg = err?.message || String(err);
+    if (attempt < REPORT_MAX_ATTEMPTS) {
+      rt._reportRetry = { day: today, attempts: attempt, nextAt: now + REPORT_RETRY_MS };
+      console.error(`日报发送失败（第 ${attempt}/${REPORT_MAX_ATTEMPTS} 次，${REPORT_RETRY_MS / 60000} 分钟后重试）: ${msg}`);
+      return;
+    }
+    cfg.lastSent = today; // 放弃当天，明天照常
+    rt._reportRetry = null;
+    await rt.store.save();
+    console.error(`日报发送失败（已尝试 ${attempt} 次，今日放弃）: ${msg}`);
+    await send(
+      channels,
+      "日报生成失败",
+      `${today} 的日报连续 ${attempt} 次生成或发送失败，今日不再自动重试。\n最后一次错误：${msg}\n可到「通知」页手动「立即发送」。`,
+      { event: "daily-report-failed" }
+    ).catch(() => {});
+  } finally {
+    rt._reportSending = false;
+  }
+}
+
+// 调度：每 30 秒按日报时区检查一次
 export function startReportScheduler(rt) {
   if (rt._reportTimer) clearInterval(rt._reportTimer); // HMR/重复初始化时防止双定时器
-  rt._reportTimer = setInterval(async () => {
-    const cfg = rt.store.settings.dailyReport;
-    if (!cfg?.enabled || !cfg.time) return;
-    const { hhmm, today } = reportClock();
-    if (hhmm !== cfg.time || cfg.lastSent === today) return;
-    cfg.lastSent = today; // 先占位，避免同一分钟重复发送
-    await rt.store.save();
-    try {
-      const { title, text, html } = await buildReport(rt);
-      await broadcast(reportChannels(rt), title, text, { event: "daily-report", html });
-      console.log(`日报已发送（${today} ${cfg.time}）`);
-    } catch (err) {
-      console.error("日报发送失败:", err?.message);
-    }
+  rt._reportTimer = setInterval(() => {
+    tickDailyReport(rt).catch((err) => console.error("日报调度异常:", err?.message));
   }, 30000);
 }
