@@ -20,6 +20,11 @@ services:
       - DB_USER=relay
       - DB_PASSWORD=change-me
       - DB_NAME=relay_monitor
+      # ---- Cloudflare Turnstile 登录人机验证（可选，强烈建议，防密码爆破）----
+      # Cloudflare 控制台 → Turnstile → 添加组件拿到两把密钥；组件「主机名」只能填域名（不支持 IP），
+      # 启用后须用该域名访问面板（如 http://monitor.example.com:8787）。两项都填才启用，改完重建容器生效。
+      # - TURNSTILE_SITE_KEY=0x4AAAAAAA...
+      # - TURNSTILE_SECRET_KEY=0x4AAAAAAA...
       # ---- v1 数据一次性迁移（可选）：导入完成后可删除这两行 ----
       - V1_DATA_DIR=/app/v1-data
     volumes:

@@ -49,6 +49,8 @@ npm run build && npm start        # 打开 http://127.0.0.1:3000，账号 admin 
 
 开发模式：`npm run dev`。对外暴露前请务必修改默认密码，并建议置于 HTTPS 反代之后。
 
+**登录人机验证（推荐）**：设置 `TURNSTILE_SITE_KEY` / `TURNSTILE_SECRET_KEY`（Cloudflare 控制台 → Turnstile 新建组件获取）后，登录页会要求先通过 Cloudflare Turnstile，服务端校验通过才会验证密码，可挡住自动化爆破。组件「主机名」只能填域名、不支持 IP，启用后须通过该域名访问面板（端口不影响，如 `http://monitor.example.com:8787`）。密钥配错会导致无法登录，去掉这两个变量重启即可恢复。
+
 ## 从 v1 迁移
 
 v1 的 `data/` 目录（stations.json / history.json / secret.key）可一次性导入：
